@@ -482,18 +482,25 @@ function bind(){
       toast("로그인 실패: 이메일/비밀번호를 확인하세요.");
     }
   };
-  $("#signUpBtn").onclick=async()=>{
-    const email=$("#emailInput").value.trim(),pw=$("#passwordInput").value,nick=$("#nicknameInput").value.trim();
-    if(!email||pw.length<6||!nick)return toast("이메일, 6자 이상 비밀번호, 닉네임을 입력하세요.");
-    try{
-      if(auth.currentUser)await authApi.signOut(auth);
-      const cred=await authApi.createUserWithEmailAndPassword(auth,email,pw);
-      await authApi.updateProfile(cred.user,{displayName:nick});
-      await cred.user.getIdToken(true);
-      await applyAccount(cred.user);
-      $("#loginDialog").close();toast(`${nick} 계정을 만들었습니다.`);
-    }catch(err){toast("회원가입 실패: 이미 가입된 이메일인지 확인하세요.")}
-  };
+    $("#signUpBtn").onclick=async()=>{
+        const email=$("#emailInput").value.trim(),pw=$("#passwordInput").value,nick=$("#nicknameInput").value.trim();
+        if(!email||pw.length<6||!nick)return toast("이메일, 6자 이상 비밀번호, 닉네임을 입력하세요.");
+        try{
+          if(auth.currentUser)await authApi.signOut(auth);
+          const cred=await authApi.createUserWithEmailAndPassword(auth,email,pw);
+          await authApi.updateProfile(cred.user,{displayName:nick});
+          await cred.user.getIdToken(true);
+          await applyAccount(cred.user);
+          $("#loginDialog").close();toast(`${nick} 계정을 만들었습니다.`);
+        }catch(err){
+          let msg = "회원가입 실패";
+          if(err.code === "auth/email-already-in-use") msg = "이미 사용 중인 이메일입니다.";
+          else if(err.code === "auth/invalid-email") msg = "올바르지 않은 이메일 형식입니다.";
+          else if(err.code === "auth/weak-password") msg = "비밀번호는 6자리 이상이어야 합니다.";
+          else msg = `가입 실패 (${err.code || '오류'}): ${err.message}`;
+          toast(msg);
+        }
+      };
   $("#logoutBtn").onclick=async()=>{
     await authApi.signOut(auth);
     const cred=await authApi.signInAnonymously(auth);
