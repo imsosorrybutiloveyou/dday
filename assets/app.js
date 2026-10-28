@@ -1,4 +1,3 @@
-
 const $ = s => document.querySelector(s);
 const $$ = s => [...document.querySelectorAll(s)];
 
@@ -99,7 +98,7 @@ async function initFirebase(){
           await applyAccount(cred.user);
         }catch(err){
           console.warn("익명 로그인 실패 또는 미사용 설정:", err.code);
-          await applyAccount(null); // 실패해도 비로그인 상태로 앱 진행
+          await applyAccount(null);
         }
       }else{
         await applyAccount(u);
@@ -482,26 +481,27 @@ function bind(){
       toast("로그인 실패: 이메일/비밀번호를 확인하세요.");
     }
   };
-    $("#signUpBtn").onclick=async()=>{
-        const email=$("#emailInput").value.trim(),pw=$("#passwordInput").value,nick=$("#nicknameInput").value.trim();
-        if(!email||pw.length<6||!nick)return toast("이메일, 6자 이상 비밀번호, 닉네임을 입력하세요.");
-        try{
-          if(auth.currentUser)await authApi.signOut(auth);
-          const cred=await authApi.createUserWithEmailAndPassword(auth,email,pw);
-          await authApi.updateProfile(cred.user,{displayName:nick});
-          await cred.user.getIdToken(true);
-          await applyAccount(cred.user);
-          $("#loginDialog").close();toast(`${nick} 계정을 만들었습니다.`);
-        }catch(err){
-          let msg = "회원가입 실패";
-          if(err.code === "auth/email-already-in-use") msg = "이미 사용 중인 이메일입니다.";
-          else if(err.code === "auth/invalid-email") msg = "올바르지 않은 이메일 형식입니다.";
-          else if(err.code === "auth/weak-password") msg = "비밀번호는 6자리 이상이어야 합니다.";
-          else msg = `가입 실패 (${err.code || '오류'}): ${err.message}`;
-          toast(msg);
-        }
-      };
-  // 👇 구글 로그인 이벤트 핸들러 추가
+
+  $("#signUpBtn").onclick=async()=>{
+    const email=$("#emailInput").value.trim(),pw=$("#passwordInput").value,nick=$("#nicknameInput").value.trim();
+    if(!email||pw.length<6||!nick)return toast("이메일, 6자 이상 비밀번호, 닉네임을 입력하세요.");
+    try{
+      if(auth.currentUser)await authApi.signOut(auth);
+      const cred=await authApi.createUserWithEmailAndPassword(auth,email,pw);
+      await authApi.updateProfile(cred.user,{displayName:nick});
+      await cred.user.getIdToken(true);
+      await applyAccount(cred.user);
+      $("#loginDialog").close();toast(`${nick} 계정을 만들었습니다.`);
+    }catch(err){
+      let msg = "회원가입 실패";
+      if(err.code === "auth/email-already-in-use") msg = "이미 사용 중인 이메일입니다.";
+      else if(err.code === "auth/invalid-email") msg = "올바르지 않은 이메일 형식입니다.";
+      else if(err.code === "auth/weak-password") msg = "비밀번호는 6자리 이상이어야 합니다.";
+      else msg = `가입 실패 (${err.code || '오류'}): ${err.message}`;
+      toast(msg);
+    }
+  };
+
   const googleLoginBtn = $("#googleLoginBtn");
   if(googleLoginBtn){
     googleLoginBtn.onclick = async () => {
@@ -517,17 +517,20 @@ function bind(){
       }
     };
   }
+
   $("#logoutBtn").onclick=async()=>{
     await authApi.signOut(auth);
     const cred=await authApi.signInAnonymously(auth);
     await applyAccount(cred.user);
     $("#loginDialog").close();toast("익명 모드로 전환했습니다.");
   };
+
   $("#copyUidBtn").onclick=$("#copyAdminUidBtn").onclick=async()=>{
     const uid=firebaseUid||"";
     if(!uid)return;
     try{await navigator.clipboard.writeText(uid);toast("UID를 복사했습니다.")}catch{toast(uid)}
   };
+
   $("#memberMode").onclick=()=>{
     $("#memberMode").classList.add("active");$("#guestMode").classList.remove("active");
     $("#loginForm").classList.remove("hidden");$("#guestInfo").classList.add("hidden");
@@ -583,7 +586,6 @@ function bind(){
   };
   $("#refreshSchoolData").onclick=()=>fetchSchoolData();
 
-  // MongoDB 운영 버전에서는 로컬 초기화 버튼은 사용하지 않습니다.
   $("#resetSite")?.classList.add("hidden");
 }
 
