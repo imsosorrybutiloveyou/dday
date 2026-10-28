@@ -73,3 +73,8 @@ GitHub Pages를 계속 쓸 경우 NEIS 프록시는 별도 Firebase Function URL
 Firebase를 연결하면 사이트는 화면에는 기존처럼 `ㅇㅇ(랜덤 코드)`를 표시하지만,
 DB 권한을 위해 내부적으로 Firebase Anonymous Authentication UID를 발급받습니다.
 따라서 Firestore를 완전히 공개 쓰기로 열지 않아도 익명 게시판을 운영할 수 있습니다.
+
+## Vercel 배포
+
+Vercel로 배포할 경우 `VERCEL_DEPLOY.md`를 먼저 읽으세요.
+정적 파일은 `/assets/...` 절대경로를 사용하며, NEIS API는 `api/neis.js` Vercel Function을 사용합니다.
