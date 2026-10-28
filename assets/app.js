@@ -94,8 +94,13 @@ async function initFirebase(){
     const off=authMod.onAuthStateChanged(auth,async u=>{
       off();
       if(!u){
-        const cred=await authMod.signInAnonymously(auth);
-        await applyAccount(cred.user);
+        try{
+          const cred=await authMod.signInAnonymously(auth);
+          await applyAccount(cred.user);
+        }catch(err){
+          console.warn("익명 로그인 실패 또는 미사용 설정:", err.code);
+          await applyAccount(null); // 실패해도 비로그인 상태로 앱 진행
+        }
       }else{
         await applyAccount(u);
       }
