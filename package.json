@@ -1,0 +1,9 @@
+{
+  "name": "seoulfinance-1-3-community",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "firebase-admin": "^13.0.0",
+    "mongodb": "^6.20.0"
+  }
+}

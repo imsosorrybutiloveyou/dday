@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "api/community.js": {
+      "maxDuration": 10
+    },
+    "api/neis.js": {
+      "maxDuration": 10
+    },
+    "api/anon-id.js": {
+      "maxDuration": 10
+    },
+    "api/setup-db.js": {
+      "maxDuration": 10
+    }
+  }
+}
