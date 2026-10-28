@@ -501,6 +501,22 @@ function bind(){
           toast(msg);
         }
       };
+  // 👇 구글 로그인 이벤트 핸들러 추가
+  const googleLoginBtn = $("#googleLoginBtn");
+  if(googleLoginBtn){
+    googleLoginBtn.onclick = async () => {
+      try{
+        if(auth.currentUser) await authApi.signOut(auth);
+        const provider = new authApi.GoogleAuthProvider();
+        const cred = await authApi.signInWithPopup(auth, provider);
+        await applyAccount(cred.user);
+        $("#loginDialog").close();
+        toast("구글 로그인 성공!");
+      }catch(err){
+        toast(`구글 로그인 실패: ${err.message}`);
+      }
+    };
+  }
   $("#logoutBtn").onclick=async()=>{
     await authApi.signOut(auth);
     const cred=await authApi.signInAnonymously(auth);
