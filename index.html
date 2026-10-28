@@ -295,7 +295,17 @@
       <div>표시 예시 <b id="guestSample">ㅇㅇ(123.45)</b></div>
       <small>서버는 전체 IP를 게시글/DB에 저장하지 않고 앞부분만 잘라 익명 표시에 사용합니다.</small>
     </div>
-  </dialog>
+    <!-- index.html 의 loginForm 내부 (예시 위치) -->
+    <div class="account-actions">
+      <button id="signInBtn" class="primary-btn" type="submit">로그인</button>
+      <button id="signUpBtn" class="subtle-btn" type="button">회원가입</button>
+    </div>
+
+    <!-- 👇 이 부분을 추가해 주세요 -->
+    <button id="googleLoginBtn" type="button" class="subtle-btn full" style="margin-top: 8px; background-color: #4285F4; color: white;">
+      Google 계정으로 로그인
+    </button>
+      </dialog>
 
   <!-- emote dialog -->
   <dialog id="emoteDialog" class="modal emote-modal">
