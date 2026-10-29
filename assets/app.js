@@ -18,6 +18,7 @@ const local = {
 
 let authApi=null;
 let auth=null;
+let authInitError=null;
 let anonymousLogin;
 let firebaseUid=null;
 let user=null;
@@ -84,10 +85,11 @@ async function initFirebase(){
   let cfg=window.BANGALL_FIREBASE_CONFIG;
   if(!cfg){
     const response=await fetch("/api/firebase-config",{cache:"no-store"});
-    cfg=await response.json();
+    try{cfg=await response.json();}
+    catch{throw new Error(`로그인 설정 API가 JSON을 반환하지 않았습니다 (HTTP ${response.status}). 최신 배포를 확인해 주세요.`);}
     if(!response.ok)throw new Error(cfg.error||"로그인 설정을 불러오지 못했습니다.");
   }
-  if(!cfg.apiKey||!cfg.authDomain||!cfg.projectId||cfg.private_key){
+  if(!cfg?.apiKey||!cfg.authDomain||!cfg.projectId||cfg.private_key){
     throw new Error("Firebase 공개 웹 앱 설정이 필요합니다. 서비스 계정 키는 사용할 수 없습니다.");
   }
   const appMod=await import("https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js");
@@ -102,7 +104,8 @@ async function initFirebase(){
 }
 
 function requireAuth(){
-  if(!auth||!authApi)throw new Error("로그인이 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.");
+  if(authInitError)throw authInitError;
+  if(!auth||!authApi)throw new Error("로그인 설정을 불러오는 중입니다. 잠시 후 다시 시도해 주세요.");
 }
 
 function authError(err){
@@ -630,6 +633,8 @@ async function init(){
   try{
     await initFirebase();
   }catch(err){
+    authInitError=err;
+    $("#accountStatus").textContent=authError(err);
     toast(authError(err));
   }
 

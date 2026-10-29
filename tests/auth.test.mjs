@@ -11,13 +11,20 @@ assert.ok(!configSource.includes('BEGIN PRIVATE KEY'),'No private key in public 
 const oldConfig=process.env.FIREBASE_WEB_CONFIG;
 function response(){return {setHeader(){},status(code){this.code=code;return this;},json(body){this.body=body;return this;}};}
 try {
-  for(const raw of ['', '{invalid', '{"type":"service_account"}']){
+  for(const raw of ['', '{invalid', 'null', '[]', '{"type":"service_account"}', '{"apiKey":"   "}']){
     process.env.FIREBASE_WEB_CONFIG=raw;
     const res=response();configHandler({method:'GET'},res);assert.equal(res.code,503);
   }
-  process.env.FIREBASE_WEB_CONFIG=JSON.stringify({apiKey:'public-key',authDomain:'example.firebaseapp.com',projectId:'example',private_key:'must-not-leak'});
+  process.env.FIREBASE_WEB_CONFIG=JSON.stringify({apiKey:'public-key',authDomain:'example.firebaseapp.com',projectId:'example',unexpected:'must-not-leak'});
   const res=response();configHandler({method:'GET'},res);
-  assert.equal(res.code,200);assert.equal(res.body.apiKey,'public-key');assert.ok(!('private_key' in res.body));
+  assert.equal(res.code,200);assert.equal(res.body.apiKey,'public-key');assert.ok(!('unexpected' in res.body));
+  process.env.FIREBASE_WEB_CONFIG=JSON.stringify({...res.body,private_key:'must-not-leak'});
+  const secret=response();configHandler({method:'GET'},secret);assert.equal(secret.code,503);assert.ok(!JSON.stringify(secret.body).includes('must-not-leak'));
+  delete process.env.FIREBASE_WEB_CONFIG;
+  const absent=response();configHandler({method:'GET'},absent);assert.match(absent.body.error,/Production/);
+  process.env.FIREBASE_WEB_CONFIG='const firebaseConfig = {}';
+  const invalid=response();configHandler({method:'GET'},invalid);assert.match(invalid.body.error,/JSON/);
+  assert.notEqual(absent.body.error,invalid.body.error);
   const post=response();configHandler({method:'POST'},post);assert.equal(post.code,405);
 } finally {if(oldConfig===undefined)delete process.env.FIREBASE_WEB_CONFIG;else process.env.FIREBASE_WEB_CONFIG=oldConfig;}
 
@@ -27,6 +34,9 @@ const source=readFileSync(new URL('../assets/app.js',import.meta.url),'utf8').re
 vm.runInContext(source,context);
 await vm.runInContext(`
 (async()=>{
+  authInitError=new Error('Configuration failure from server');
+  try{requireAuth();throw Error('Expected initialization error');}catch(err){if(err!==authInitError)throw err;}
+  authInitError=null;
   const calls=[];
   const guest={uid:'guest',isAnonymous:true,getIdToken:async()=>'guest-token'};
   auth={currentUser:guest,authStateReady:async()=>{}};
