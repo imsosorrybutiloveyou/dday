@@ -52,7 +52,7 @@ function dateShort(ts){
 }
 function dateFull(ts){return new Date(ts).toLocaleString("ko-KR",{year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}
 function ymd(d=new Date()){return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`}
-function toast(msg){const t=$("#toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),1800)}
+function toast(msg){const t=$("#toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),4500)}
 function emoteKey(e){return String(e.docId||e.id)}
 function allEmotes(){return [...BASE_EMOTES,...emotes]}
 function findEmote(id){return allEmotes().find(e=>emoteKey(e)===String(id))}
@@ -298,7 +298,7 @@ function renderPosts(){
       <span class="post-views">${p.views||0}</span>
       <span class="post-up">${p.up||0}</span>
     </div>`;
-  }).join(""):`<div style="padding:42px;text-align:center;color:#888;border-bottom:1px solid #ddd">게시물이 없습니다.</div>`;
+  }).join(""):`<div class="empty-state"><strong>${state.search||state.category!=="전체"||state.tab!=="all"?"아직 일치하는 글이 없어요":"첫 이야기를 기다리고 있어요"}</strong><p>${state.search||state.category!=="전체"||state.tab!=="all"?"다른 검색어나 말머리로 찾아보세요.":"오늘 있었던 일, 궁금한 것, 가벼운 인사도 좋아요."}</p></div>`;
 
   $$("[data-open-post]").forEach(b=>b.onclick=()=>openPost(b.dataset.openPost));
   $("#pagination").innerHTML=Array.from({length:Math.min(pages,10)},(_,i)=>i+1).map(n=>`<button class="page-btn ${n===state.page?"active":""}" data-page="${n}" type="button">${n}</button>`).join("");
@@ -308,12 +308,12 @@ function renderPosts(){
 
 function renderNotices(){
   const n=posts.filter(p=>p.notice).slice(0,3);
-  $("#noticeList").innerHTML=n.map(p=>`<button class="notice-link" type="button" data-notice="${esc(p.id)}">[공지] ${esc(p.title)}</button>`).join("");
+  $("#noticeList").innerHTML=n.map(p=>`<button class="notice-link" type="button" data-notice="${esc(p.id)}">${esc(p.title)}</button>`).join("")||`<p class="quiet-message">등록된 공지가 없어요.</p>`;
   $$("[data-notice]").forEach(b=>b.onclick=()=>openPost(b.dataset.notice));
 }
 function renderHot(){
   const h=[...posts].filter(p=>!p.notice).sort((a,b)=>(((b.up||0)-(b.down||0))*5+(b.views||0))-(((a.up||0)-(a.down||0))*5+(a.views||0))).slice(0,5);
-  $("#hotList").innerHTML=h.map((p,i)=>`<div class="hot-row"><span class="hot-rank">${i+1}</span><button type="button" class="hot-link" data-hot="${esc(p.id)}">${esc(p.title)}</button></div>`).join("");
+  $("#hotList").innerHTML=h.map((p,i)=>`<div class="hot-row"><span class="hot-rank">${i+1}</span><button type="button" class="hot-link" data-hot="${esc(p.id)}">${esc(p.title)}</button></div>`).join("")||`<p class="quiet-message">이야기가 쌓이면 여기에 모아볼게요.</p>`;
   $$("[data-hot]").forEach(b=>b.onclick=()=>openPost(b.dataset.hot));
 }
 function renderEmotes(){
@@ -624,7 +624,6 @@ async function init(){
   bind();
   $("#todayDate").textContent=new Date().toLocaleDateString("ko-KR",{month:"long",day:"numeric",weekday:"short"});
   $("#favoriteBtn").textContent=local.get(KEYS.favorite,false)?"★ 즐겨찾기":"☆ 즐겨찾기";
-  $("#onlineCount").textContent=String(11+Math.floor(Math.random()*13));
 
   await loadGuestCode();
   renderCategories();
