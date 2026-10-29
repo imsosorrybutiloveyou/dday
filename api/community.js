@@ -1,3 +1,5 @@
+import { del } from "@vercel/blob";
+import { validateAttachments } from "./_media.js";
 
 import { ObjectId } from "mongodb";
 import { getDb } from "./_mongo.js";
@@ -35,6 +37,7 @@ function publicPost(p) {
     down: Number(p.down || 0),
     notice: Boolean(p.notice),
     image: p.image || "",
+    attachments: p.attachments || [],
     commentCount: Number(p.commentCount || 0),
     comments: []
   };
@@ -152,9 +155,11 @@ export default async function handler(req, res) {
     if (action === "createPost") {
       const title = text(body.title, 80);
       const postBody = text(body.body, 5000);
-      if (!title || !postBody) return json(res, 400, { error: "제목과 내용을 입력하세요." });
-
+      if (!title) return json(res, 400, { error: "제목을 입력하세요." });
+      const attachments = await validateAttachments(body.attachments, uid);
+      if (!postBody && !attachments.length) return json(res, 400, { error: "내용을 입력하거나 파일을 첨부하세요." });
       const doc = {
+        attachments,
         category: text(body.category, 20) || "잡담",
         title,
         body: postBody,
@@ -246,6 +251,7 @@ export default async function handler(req, res) {
       if (!post) return json(res, 404, { error: "게시글이 없습니다." });
       if (!admin && post.ownerUid !== uid) return json(res, 403, { error: "삭제 권한이 없습니다." });
 
+      if (post.attachments?.length) await del(post.attachments.map(media => media.url));
       await Promise.all([
         db.collection("posts").deleteOne({ _id: postId }),
         db.collection("comments").deleteMany({ postId }),
@@ -256,6 +262,9 @@ export default async function handler(req, res) {
 
     if (action === "deleteAllPosts") {
       if (!admin) return json(res, 403, { error: "관리자 권한이 필요합니다." });
+      const attached = await db.collection("posts").find({ "attachments.0": { $exists: true } }, { projection: { attachments: 1 } }).toArray();
+      const urls = attached.flatMap(post => post.attachments.map(media => media.url));
+      if (urls.length) await del(urls);
       await Promise.all([
         db.collection("posts").deleteMany({}),
         db.collection("comments").deleteMany({}),

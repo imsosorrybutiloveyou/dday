@@ -227,3 +227,16 @@ Firestore와 Firebase Storage는 이 버전에서는 필요 없습니다.
 검증: 시크릿 창에서 익명 글쓰기 → 이메일 회원가입/로그인 → 로그아웃 후 익명 글쓰기 → Google 로그인 순서로 확인하세요. 계정 로그인 실패나 Google 팝업 취소 후에도 기존 익명 글쓰기가 가능해야 합니다. 게시글 저장에는 `MONGODB_URI`, 서버 토큰 검증에는 `FIREBASE_SERVICE_ACCOUNT_JSON`이 별도로 필요합니다.
 
 로컬 회귀 검사: `node tests/auth.test.mjs` (Firebase SDK 동작을 대체한 검사이며 실제 외부 연동 검증은 별도입니다.)
+
+## 사진·영상 파일 첨부
+
+Vercel → dday 프로젝트 → Storage → Create Database → Blob에서 **Public** 저장소를 만들고 프로젝트의 Production 환경에 연결하세요. `BLOB_READ_WRITE_TOKEN`이 자동으로 연결된 것을 확인한 뒤 재배포합니다. 이 값은 서버 전용이므로 공개 웹 설정에 넣지 마세요. Preview에서 시험한다면 해당 환경에도 별도로 연결해야 합니다.
+
+- 사진: JPG, PNG, WebP, GIF / 파일당 10MB
+- 영상: MP4, WebM / 파일당 100MB (코덱 재생 지원은 브라우저에 따라 다름)
+- 글 하나에 최대 6개. 제목과 첨부만으로도 등록할 수 있습니다.
+- Firebase 인증을 받은 사용자(익명 포함)가 Blob으로 직접 업로드합니다. 게시판 API에는 파일 주소만 전달합니다.
+- 파일 주소는 공개되므로 비공개 자료를 올리지 마세요. Blob 사용량에 따른 Vercel 요금이 발생할 수 있습니다.
+- 업로드 후 글 등록에 실패하면 재시도할 때 업로드한 파일을 재사용합니다. 실패한 글을 포기한 경우 미사용 파일이 남을 수 있으므로 Storage에서 정리할 수 있습니다. 게시글 삭제 시 그 글의 첨부 파일도 삭제합니다.
+
+브라우저용 SDK는 `assets/upload-client.js`에 번들로 포함됩니다. SDK를 변경하면 `npm run bundle:uploads`로 다시 생성하고 함께 커밋하세요. 검사: `npm test`.

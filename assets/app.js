@@ -24,6 +24,8 @@ let firebaseUid=null;
 let user=null;
 let guestCode="?.?";
 let posts=[];
+let pendingMedia=[];
+let submittingPost=false;
 let emotes=[];
 let settings={discord:SITE.discord};
 let votes=local.get(KEYS.votes,{});
@@ -298,7 +300,7 @@ function renderPosts(){
       <span class="post-views">${p.views||0}</span>
       <span class="post-up">${p.up||0}</span>
     </div>`;
-  }).join(""):`<div class="empty-state"><strong>${state.search||state.category!=="전체"||state.tab!=="all"?"아직 일치하는 글이 없어요":"첫 이야기를 기다리고 있어요"}</strong><p>${state.search||state.category!=="전체"||state.tab!=="all"?"다른 검색어나 말머리로 찾아보세요.":"오늘 있었던 일, 궁금한 것, 가벼운 인사도 좋아요."}</p></div>`;
+  }).join(""):`<div class="empty-state"><strong>${state.search||state.category!=="전체"||state.tab!=="all"?"검색 결과가 없습니다.":"등록된 글이 없습니다."}</strong><p>${state.search||state.category!=="전체"||state.tab!=="all"?"검색어나 말머리를 바꿔 주세요.":"글쓰기 버튼을 눌러 글을 남겨 주세요."}</p></div>`;
 
   $$("[data-open-post]").forEach(b=>b.onclick=()=>openPost(b.dataset.openPost));
   $("#pagination").innerHTML=Array.from({length:Math.min(pages,10)},(_,i)=>i+1).map(n=>`<button class="page-btn ${n===state.page?"active":""}" data-page="${n}" type="button">${n}</button>`).join("");
@@ -308,12 +310,12 @@ function renderPosts(){
 
 function renderNotices(){
   const n=posts.filter(p=>p.notice).slice(0,3);
-  $("#noticeList").innerHTML=n.map(p=>`<button class="notice-link" type="button" data-notice="${esc(p.id)}">${esc(p.title)}</button>`).join("")||`<p class="quiet-message">등록된 공지가 없어요.</p>`;
+  $("#noticeList").innerHTML=n.map(p=>`<button class="notice-link" type="button" data-notice="${esc(p.id)}">${esc(p.title)}</button>`).join("")||`<p class="quiet-message">등록된 공지가 없습니다.</p>`;
   $$("[data-notice]").forEach(b=>b.onclick=()=>openPost(b.dataset.notice));
 }
 function renderHot(){
   const h=[...posts].filter(p=>!p.notice).sort((a,b)=>(((b.up||0)-(b.down||0))*5+(b.views||0))-(((a.up||0)-(a.down||0))*5+(a.views||0))).slice(0,5);
-  $("#hotList").innerHTML=h.map((p,i)=>`<div class="hot-row"><span class="hot-rank">${i+1}</span><button type="button" class="hot-link" data-hot="${esc(p.id)}">${esc(p.title)}</button></div>`).join("")||`<p class="quiet-message">이야기가 쌓이면 여기에 모아볼게요.</p>`;
+  $("#hotList").innerHTML=h.map((p,i)=>`<div class="hot-row"><span class="hot-rank">${i+1}</span><button type="button" class="hot-link" data-hot="${esc(p.id)}">${esc(p.title)}</button></div>`).join("")||`<p class="quiet-message">등록된 글이 없습니다.</p>`;
   $$("[data-hot]").forEach(b=>b.onclick=()=>openPost(b.dataset.hot));
 }
 function renderEmotes(){
@@ -350,7 +352,14 @@ async function openPost(id){
     $("#downCount").textContent=p.down||0;
     $("#viewBody").innerHTML=renderRichText(p.body||"");
     const img=safeUrl(p.image||"");
-    $("#viewImage").innerHTML=img?`<img src="${esc(img)}" alt="첨부 이미지" referrerpolicy="no-referrer">`:"";
+    $("#viewImage").innerHTML=(img?`<img src="${esc(img)}" alt="첨부 이미지" referrerpolicy="no-referrer">`:"")+
+      (p.attachments||[]).map(media=>{
+        const url=safeUrl(media.url);
+        if(!url)return "";
+        return media.type?.startsWith("video/")
+          ? `<video src="${esc(url)}" controls playsinline preload="metadata" aria-label="${esc(media.name||"첨부 영상")}"></video>`
+          : `<img src="${esc(url)}" alt="${esc(media.name||"첨부 사진")}" loading="lazy">`;
+      }).join("");
     $("#deletePost").classList.toggle("hidden",!(state.admin||p.ownerUid===firebaseUid));
     renderComments(p);
     renderPosts();
@@ -415,6 +424,19 @@ function fileToDataUrl(file){
   });
 }
 
+function renderAttachments(){
+  $("#attachmentList").innerHTML=pendingMedia.map((media,index)=>`<div class="attachment-item">
+    ${media.file.type.startsWith("video/")?`<video src="${esc(media.preview)}" preload="metadata" muted playsinline></video>`:`<img src="${esc(media.preview)}" alt="">`}
+    <span>${esc(media.file.name)}<small>${(media.file.size/1024/1024).toFixed(1)} MB</small></span>
+    <button type="button" class="subtle-btn" data-remove-attachment="${index}" aria-label="${esc(media.file.name)} 삭제">삭제</button>
+  </div>`).join("");
+  $$("[data-remove-attachment]").forEach(button=>button.onclick=()=>{
+    if(submittingPost)return;
+    const [removed]=pendingMedia.splice(Number(button.dataset.removeAttachment),1);
+    URL.revokeObjectURL(removed.preview);renderAttachments();
+  });
+}
+
 function bind(){
   $$(".dialog-close").forEach(b=>b.onclick=()=>b.closest("dialog").close());
   $$(".dialog-cancel").forEach(b=>b.onclick=()=>b.closest("dialog").close());
@@ -442,20 +464,66 @@ function bind(){
   };
 
   $("#writeBody").oninput=e=>$("#writeCount").textContent=`${e.target.value.length} / 5000`;
+  $("#writeFiles").onchange=e=>{
+    const files=[...e.target.files];
+    e.target.value="";
+    if(pendingMedia.length+files.length>6)return toast("파일은 최대 6개까지 첨부할 수 있습니다.");
+    const types=["image/jpeg","image/png","image/webp","image/gif","video/mp4","video/webm"];
+    for(const file of files){
+      if(!types.includes(file.type))return toast("JPG, PNG, WebP, GIF 사진과 MP4, WebM 영상만 가능합니다.");
+      if(!file.size||file.size>(file.type.startsWith("video/")?100:10)*1024*1024)return toast("사진은 10MB, 영상은 100MB까지 가능합니다.");
+    }
+    pendingMedia.push(...files.map(file=>({file,preview:URL.createObjectURL(file)})));
+    renderAttachments();
+  };
+  $("#postDialog").onclose=()=>{$$("#viewImage video").forEach(video=>video.pause());};
+  $("#writeDialog").oncancel=e=>{if(submittingPost)e.preventDefault();};
   $("#writeForm").onsubmit=async e=>{
     e.preventDefault();
+    if(submittingPost)return;
+    submittingPost=true;
+    $$("#writeDialog button, #writeDialog input, #writeDialog textarea, #writeDialog select").forEach(el=>el.disabled=true);
     try{
+      await token();
+      const attachments=[];
+      if(pendingMedia.some(media=>!media.url)){
+        const response=await fetch("/api/upload",{cache:"no-store"});
+        const storage=await response.json();
+        if(!response.ok||!storage.available)throw new Error("첨부 저장소가 아직 연결되지 않았습니다. 관리자에게 문의해 주세요.");
+      }
+      for(const [index,media] of pendingMedia.entries()){
+        if(!media.url){
+          const {upload}=await import("/assets/upload-client.js");
+          const extensions={"image/jpeg":"jpg","image/png":"png","image/webp":"webp","image/gif":"gif","video/mp4":"mp4","video/webm":"webm"};
+          const pathname=`posts/${encodeURIComponent(auth.currentUser.uid)}/${crypto.randomUUID()}.${extensions[media.file.type]}`;
+          const result=await upload(pathname,media.file,{
+            access:"public",handleUploadUrl:"/api/upload",multipart:true,
+            contentType:media.file.type,clientPayload:JSON.stringify({type:media.file.type}),
+            headers:{Authorization:`Bearer ${await token()}`},
+            onUploadProgress:({percentage})=>{$("#uploadStatus").textContent=`첨부 ${index+1}/${pendingMedia.length} 업로드 중 · ${Math.round(percentage)}%`;}
+          });
+          media.url=result.url;
+        }
+        attachments.push({url:media.url,name:media.file.name});
+      }
+      $("#uploadStatus").textContent="글 저장 중…";
       const data=await api("createPost",{
         category:$("#writeCategory").value,
-        title:$("#writeTitle").value.trim(),
-        body:$("#writeBody").value.trim(),
-        author:currentName(),
-        guestCode:currentCode(),
-        image:safeUrl($("#writeImageUrl").value.trim())
+        title:$("#writeTitle").value.trim(),body:$("#writeBody").value.trim(),
+        author:currentName(),guestCode:currentCode(),
+        image:safeUrl($("#writeImageUrl").value.trim()),attachments
       });
       posts.unshift(data.post);
-      e.target.reset();$("#writeCount").textContent="0 / 5000";$("#writeDialog").close();renderPosts();toast("글이 등록되었습니다.");
-    }catch(err){toast(err.message)}
+      pendingMedia.forEach(media=>URL.revokeObjectURL(media.preview));pendingMedia=[];renderAttachments();
+      e.target.reset();$("#writeCount").textContent="0 / 5000";$("#uploadStatus").textContent="";
+      $("#writeDialog").close();renderPosts();toast("글이 등록되었습니다.");
+    }catch(err){
+      $("#uploadStatus").textContent=`등록 실패: ${err.message} · 작성 내용과 첨부는 유지됩니다.`;
+      toast(err.message);
+    }finally{
+      submittingPost=false;
+      $$("#writeDialog button, #writeDialog input, #writeDialog textarea, #writeDialog select").forEach(el=>el.disabled=false);
+    }
   };
 
   $("#commentForm").onsubmit=async e=>{

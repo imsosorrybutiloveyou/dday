@@ -1,7 +1,7 @@
 {
   "functions": {
     "api/community.js": {
-      "maxDuration": 10
+      "maxDuration": 30
     },
     "api/neis.js": {
       "maxDuration": 10
@@ -11,6 +11,9 @@
     },
     "api/setup-db.js": {
       "maxDuration": 10
+    },
+    "api/upload.js": {
+      "maxDuration": 30
     }
   }
 }

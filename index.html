@@ -50,7 +50,7 @@
         <div>
           <p class="eyebrow">SEOUL FINANCE HIGH SCHOOL · CLASS 1-3</p>
           <h1>서울금융고 1학년 3반 갤러리</h1>
-          <p class="desc">쉬는 시간에 나누던 이야기, 여기서도 이어가요.<br>로그인 없이도 <b>ㅇㅇ</b>으로 편하게 남길 수 있어요.</p>
+          <p class="desc">잡담 · 질문 · 학교 소식. 익명으로도 글을 쓸 수 있습니다.</p>
         </div>
         <button id="favoriteBtn" class="subtle-btn" type="button">☆ 즐겨찾기</button>
       </div>
@@ -247,18 +247,27 @@
         </label>
       </div>
       <div class="writer-line">작성자 <b id="writeAuthor">ㅇㅇ</b></div>
-      <textarea id="writeBody" class="editor" maxlength="5000" required placeholder="내용을 입력하세요"></textarea>
+      <textarea id="writeBody" class="editor" maxlength="5000" placeholder="내용을 입력하세요. 사진·영상만 첨부해도 됩니다."></textarea>
+      <div class="attachment-tools">
+        <label for="writeFiles" class="file-label">사진·영상 첨부</label>
+        <input id="writeFiles" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,video/mp4,video/webm" aria-describedby="attachmentHelp">
+        <span id="attachmentHelp">최대 6개 · 사진 10MB · 영상 100MB (MP4/WebM)</span>
+      </div>
+      <div id="attachmentList" class="attachment-list"></div>
+      <p id="uploadStatus" class="upload-status" role="status" aria-live="polite"></p>
+      <details class="image-url-details"><summary>이미지 주소로 첨부</summary>
       <label class="image-url-line">
         <span>이미지 URL <small>(선택)</small></span>
         <input id="writeImageUrl" type="url" placeholder="https://...">
       </label>
+      </details>
       <div class="editor-bottom">
         <button id="writeEmoteOpen" type="button" class="subtle-btn">반콘 넣기</button>
         <span id="writeCount">0 / 5000</span>
       </div>
       <div class="submit-line">
         <button type="button" class="subtle-btn dialog-cancel">취소</button>
-        <button class="primary-btn">등록</button>
+        <button id="submitPost" class="primary-btn">등록</button>
       </div>
     </form>
   </dialog>
