@@ -1,3 +1,5 @@
+import { castVote, initializeVotes } from "./_votes.js";
+import { accountNickname, saveNickname, isAnonymous } from "./_profiles.js";
 import { del } from "@vercel/blob";
 import { validateAttachments } from "./_media.js";
 
@@ -85,6 +87,7 @@ async function authContext(req, db) {
   return {
     decoded,
     uid: decoded.uid,
+    nickname: await accountNickname(db, decoded),
     admin: await isAdmin(db, decoded.uid)
   };
 }
@@ -123,6 +126,7 @@ export default async function handler(req, res) {
       const id = objectId(req.query.id);
       if (!id) return json(res, 400, { error: "잘못된 게시글 ID" });
 
+      await initializeVotes(db, id);
       const post = await db.collection("posts").findOneAndUpdate(
         { _id: id },
         { $inc: { views: 1 } },
@@ -145,11 +149,16 @@ export default async function handler(req, res) {
       return json(res, 405, { error: "Method not allowed" });
     }
 
-    const { uid, admin } = await authContext(req, db);
+    const { decoded, uid, admin, nickname } = await authContext(req, db);
     const body = req.body || {};
 
     if (action === "me") {
-      return json(res, 200, { uid, isAdmin: admin });
+      return json(res, 200, { uid, isAdmin: admin, nickname });
+    }
+
+    if (action === "updateNickname") {
+      const saved = await saveNickname(db, decoded, body.nickname);
+      return json(res, 200, { nickname: saved });
     }
 
     if (action === "createPost") {
@@ -163,11 +172,12 @@ export default async function handler(req, res) {
         category: text(body.category, 20) || "잡담",
         title,
         body: postBody,
-        author: text(body.author, 20) || "ㅇㅇ",
+        author: nickname,
         guestCode: text(body.guestCode, 40),
         ownerUid: uid,
         createdAt: new Date(),
         views: 0,
+        voterUids: [],
         up: 0,
         down: 0,
         notice: false,
@@ -193,6 +203,7 @@ export default async function handler(req, res) {
         ownerUid: uid,
         createdAt: new Date(),
         views: 0,
+        voterUids: [],
         up: 0,
         down: 0,
         notice: true,
@@ -213,7 +224,7 @@ export default async function handler(req, res) {
 
       const doc = {
         postId,
-        author: text(body.author, 20) || "ㅇㅇ",
+        author: nickname,
         guestCode: text(body.guestCode, 40),
         ownerUid: uid,
         text: commentText,
@@ -225,22 +236,10 @@ export default async function handler(req, res) {
     }
 
     if (action === "vote") {
+      if (isAnonymous(decoded)) return json(res, 403, { error: "추천·비추천은 로그인 후 이용할 수 있습니다." });
       const postId = objectId(body.postId);
-      const kind = body.kind === "down" ? "down" : "up";
       if (!postId) return json(res, 400, { error: "잘못된 게시글입니다." });
-
-      try {
-        await db.collection("votes").insertOne({ postId, uid, kind, createdAt: new Date() });
-      } catch (err) {
-        if (err?.code === 11000) return json(res, 409, { error: "이미 투표한 글입니다." });
-        throw err;
-      }
-
-      const post = await db.collection("posts").findOneAndUpdate(
-        { _id: postId },
-        { $inc: { [kind]: 1 } },
-        { returnDocument: "after" }
-      );
+      const post = await castVote(db, postId, uid, body.kind);
       return json(res, 200, { post: publicPost(post) });
     }
 
@@ -286,7 +285,7 @@ export default async function handler(req, res) {
         mime: check.mime,
         bytes: check.bytes,
         ownerUid: uid,
-        ownerName: text(body.ownerName, 20) || "ㅇㅇ",
+        ownerName: nickname || "ㅇㅇ",
         order: count,
         createdAt: new Date()
       };

@@ -28,7 +28,7 @@ try {
   const post=response();configHandler({method:'POST'},post);assert.equal(post.code,405);
 } finally {if(oldConfig===undefined)delete process.env.FIREBASE_WEB_CONFIG;else process.env.FIREBASE_WEB_CONFIG=oldConfig;}
 
-const elements=new Map(ids.map(id=>['#'+id,{value:'',classList:{add(){},remove(){},toggle(){}},close(){}}]));
+const elements=new Map(ids.map(id=>['#'+id,{value:'',classList:{add(){},remove(){},toggle(){}},close(){},focus(){}}]));
 const context=vm.createContext({console,URL,URLSearchParams,setTimeout(){},localStorage:{getItem(){return null;}},document:{querySelector:s=>elements.get(s),querySelectorAll:()=>[]}});
 const source=readFileSync(new URL('../assets/app.js',import.meta.url),'utf8').replace(/\ninit\(\);\s*$/,'');
 vm.runInContext(source,context);
@@ -82,6 +82,14 @@ await vm.runInContext(`
   authApi.signInWithPopup=async()=>{auth.currentUser=member;return {user:member};};
   await $('#googleLoginBtn').onclick();
   if(user?.uid!=='member')throw Error('Google login must update account UI');
+  globalThis.fetch=async(url,options)=>({ok:true,json:async()=>({isAdmin:false,nickname:JSON.parse(options.body).nickname||'앱닉네임'})});
+  $('#profileNickname').value='앱닉네임';
+  await $('#saveNicknameBtn').onclick();
+  if(user.nickname!=='앱닉네임')throw Error('Nickname save must update displayed account');
+  member.displayName='Google name after another login';
+  await applyAccount(member);
+  if(user.nickname!=='앱닉네임')throw Error('Saved nickname must win over provider display name');
+
 
 })();`,context);
 console.log('Auth regression checks passed: unique controls, public config, session preservation, popup timing, anonymous token concurrency/retry.');

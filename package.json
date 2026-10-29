@@ -12,6 +12,6 @@
   },
   "scripts": {
     "bundle:uploads": "esbuild assets/upload.js --bundle --minify --format=esm --outfile=assets/upload-client.js",
-    "test": "node tests/auth.test.mjs && node tests/media.test.mjs"
+    "test": "node tests/auth.test.mjs && node tests/media.test.mjs && node tests/votes-profiles.test.mjs"
   }
 }

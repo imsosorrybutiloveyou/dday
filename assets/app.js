@@ -26,6 +26,7 @@ let guestCode="?.?";
 let posts=[];
 let pendingMedia=[];
 let submittingPost=false;
+const votingPosts=new Set();
 let emotes=[];
 let settings={discord:SITE.discord};
 let votes=local.get(KEYS.votes,{});
@@ -174,6 +175,7 @@ async function applyAccount(u){
   try{
     const me=u?await api("me",{}):{};
     state.admin=Boolean(me.isAdmin);
+    if(user&&me.nickname)user.nickname=me.nickname;
   }catch{state.admin=false}
   renderIdentity();
   renderAccountStatus();
@@ -242,6 +244,11 @@ function renderIdentity(){
 
 function renderAccountStatus(){
   if(!$("#accountStatus"))return;
+  $("#profilePanel").classList.toggle("hidden",!user);
+  $("#loginFields").classList.toggle("hidden",Boolean(user));
+  $("#emailInput").disabled=Boolean(user);
+  $("#passwordInput").disabled=Boolean(user);
+  if(user)$("#profileNickname").value=user.nickname;
   if(!user){
     $("#accountStatus").textContent="현재 익명 계정입니다. 고정닉이 필요하면 이메일 계정으로 로그인하세요.";
     $("#uidBox").classList.add("hidden");
@@ -341,6 +348,7 @@ async function openPost(id){
     const idx=posts.findIndex(x=>x.id===p.id);
     if(idx>=0)posts[idx]={...posts[idx],...p};
     state.currentPost=p.id;
+    $("#upvoteBtn").disabled=$("#downvoteBtn").disabled=votingPosts.has(p.id);
 
     $("#viewCategory").textContent=p.notice?"공지":p.category;
     $("#viewTitle").textContent=p.title;
@@ -561,6 +569,7 @@ function bind(){
 
   $("#loginForm").onsubmit=async e=>{
     e.preventDefault();
+    if(user){await saveProfileNickname();return;}
     const email=$("#emailInput").value.trim(),pw=$("#passwordInput").value;
     try{
       requireAuth();
@@ -580,6 +589,7 @@ function bind(){
       const cred=await authApi.createUserWithEmailAndPassword(auth,email,pw);
       await authApi.updateProfile(cred.user,{displayName:nick});
       await cred.user.getIdToken(true);
+      await api("updateNickname",{nickname:nick});
       await applyAccount(cred.user);
       $("#loginDialog").close();toast(`${nick} 계정을 만들었습니다.`);
     }catch(err){
@@ -595,13 +605,15 @@ function bind(){
         const provider = new authApi.GoogleAuthProvider();
         const cred = await authApi.signInWithPopup(auth, provider);
         await applyAccount(cred.user);
-        $("#loginDialog").close();
-        toast("구글 로그인 성공!");
+        $("#profileNickname").focus();
+        toast("로그인했습니다. 닉네임을 설정하거나 변경할 수 있습니다.");
       }catch(err){
         toast(authError(err));
       }
     };
   }
+
+  $("#saveNicknameBtn").onclick=saveProfileNickname;
 
   $("#logoutBtn").onclick=async()=>{
     try{
@@ -678,14 +690,36 @@ function bind(){
   $("#resetSite")?.classList.add("hidden");
 }
 
+async function saveProfileNickname(){
+  const button=$("#saveNicknameBtn");
+  if(button.disabled)return;
+  const nickname=$("#profileNickname").value.trim();
+  if(!nickname||nickname.length>16)return toast("닉네임을 1~16자로 입력하세요.");
+  button.disabled=true;
+  try{
+    const data=await api("updateNickname",{nickname});
+    user.nickname=data.nickname;
+    renderIdentity();renderAccountStatus();toast("닉네임을 변경했습니다.");
+  }catch(err){toast(err.message);}
+  finally{button.disabled=false;}
+}
+
 async function vote(kind){
   const p=findPost(state.currentPost);if(!p)return;
+  if(!user){toast("추천·비추천은 로그인 후 이용할 수 있습니다.");$("#loginDialog").showModal();return;}
+  if(votingPosts.has(p.id))return;
+  votingPosts.add(p.id);
+  $("#upvoteBtn").disabled=$("#downvoteBtn").disabled=true;
   try{
     const data=await api("vote",{postId:p.id,kind});
     Object.assign(p,{up:data.post.up,down:data.post.down});
-    $("#upCount").textContent=p.up||0;$("#downCount").textContent=p.down||0;
+    if(state.currentPost===p.id){$("#upCount").textContent=p.up||0;$("#downCount").textContent=p.down||0;}
     renderPosts();toast(kind==="up"?"개추했습니다.":"비추했습니다.");
-  }catch(err){toast(err.message)}
+  }catch(err){toast(err.message);}
+  finally{
+    votingPosts.delete(p.id);
+    if(state.currentPost===p.id)$("#upvoteBtn").disabled=$("#downvoteBtn").disabled=false;
+  }
 }
 
 async function init(){

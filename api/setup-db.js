@@ -16,7 +16,8 @@ export default async function handler(req, res) {
     }
 
     const db = await getDb();
-    await db.collection("votes").createIndex({ postId: 1, uid: 1 }, { unique: true });
+    // Legacy vote history is read during migration; new votes use an atomic post update.
+    await db.collection("votes").createIndex({ postId: 1 });
     await db.collection("posts").createIndex({ createdAt: -1 });
     await db.collection("comments").createIndex({ postId: 1, createdAt: 1 });
     await db.collection("emotes").createIndex({ order: 1 });
