@@ -18,6 +18,7 @@ const local = {
 
 let authApi=null;
 let auth=null;
+let anonymousLogin;
 let firebaseUid=null;
 let user=null;
 let guestCode="?.?";
@@ -80,37 +81,59 @@ async function loadGuestCode(){
 }
 
 async function initFirebase(){
-  const cfg=window.BANGALL_FIREBASE_CONFIG;
-  if(!cfg)throw new Error("firebase-config.js에 Firebase 설정을 넣어야 합니다.");
-
+  let cfg=window.BANGALL_FIREBASE_CONFIG;
+  if(!cfg){
+    const response=await fetch("/api/firebase-config",{cache:"no-store"});
+    cfg=await response.json();
+    if(!response.ok)throw new Error(cfg.error||"로그인 설정을 불러오지 못했습니다.");
+  }
+  if(!cfg.apiKey||!cfg.authDomain||!cfg.projectId||cfg.private_key){
+    throw new Error("Firebase 공개 웹 앱 설정이 필요합니다. 서비스 계정 키는 사용할 수 없습니다.");
+  }
   const appMod=await import("https://www.gstatic.com/firebasejs/11.0.2/firebase-app.js");
-  const authMod=await import("https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js");
-  const app=appMod.initializeApp(cfg);
-  auth=authMod.getAuth(app);
-  authApi=authMod;
+  authApi=await import("https://www.gstatic.com/firebasejs/11.0.2/firebase-auth.js");
+  auth=authApi.getAuth(appMod.initializeApp(cfg));
+  await auth.authStateReady();
+  if(!auth.currentUser){
+    try{await ensureAnonymous();}
+    catch(err){toast(authError(err));}
+  }
+  await applyAccount(auth.currentUser);
+}
 
-  await new Promise(resolve=>{
-    const off=authMod.onAuthStateChanged(auth,async u=>{
-      off();
-      if(!u){
-        try{
-          const cred=await authMod.signInAnonymously(auth);
-          await applyAccount(cred.user);
-        }catch(err){
-          console.warn("익명 로그인 실패 또는 미사용 설정:", err.code);
-          await applyAccount(null);
-        }
-      }else{
-        await applyAccount(u);
-      }
-      resolve();
-    });
-  });
+function requireAuth(){
+  if(!auth||!authApi)throw new Error("로그인이 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.");
+}
+
+function authError(err){
+  const messages={
+    "auth/operation-not-allowed":"이 로그인 방식이 아직 활성화되지 않았습니다. 관리자에게 문의해 주세요.",
+    "auth/admin-restricted-operation":"익명 로그인이 활성화되지 않았습니다. 관리자에게 문의해 주세요.",
+    "auth/unauthorized-domain":"이 사이트에서 로그인이 허용되지 않았습니다. 관리자에게 문의해 주세요.",
+    "auth/invalid-api-key":"로그인 설정이 올바르지 않습니다. 관리자에게 문의해 주세요.",
+    "auth/invalid-credential":"이메일 또는 비밀번호를 확인해 주세요.",
+    "auth/email-already-in-use":"이미 사용 중인 이메일입니다.",
+    "auth/invalid-email":"올바른 이메일 주소를 입력해 주세요.",
+    "auth/weak-password":"비밀번호는 6자리 이상이어야 합니다.",
+    "auth/popup-blocked":"팝업을 허용한 뒤 다시 시도해 주세요.",
+    "auth/popup-closed-by-user":"로그인 창이 닫혔습니다.",
+    "auth/network-request-failed":"네트워크 연결을 확인해 주세요."
+  };
+  return messages[err.code]||err.message||"로그인에 실패했습니다. 다시 시도해 주세요.";
+}
+
+async function ensureAnonymous(){
+  requireAuth();
+  await auth.authStateReady();
+  if(auth.currentUser)return auth.currentUser;
+  anonymousLogin ||= authApi.signInAnonymously(auth).finally(()=>{anonymousLogin=null;});
+  return (await anonymousLogin).user;
 }
 
 async function token(){
-  if(!auth?.currentUser)throw new Error("로그인 정보가 없습니다.");
-  return await auth.currentUser.getIdToken();
+  requireAuth();
+  const account=await ensureAnonymous();
+  return account.getIdToken();
 }
 
 async function api(action,payload={},method="POST"){
@@ -144,7 +167,7 @@ async function applyAccount(u){
     };
   }
   try{
-    const me=await api("me",{});
+    const me=u?await api("me",{}):{};
     state.admin=Boolean(me.isAdmin);
   }catch{state.admin=false}
   renderIdentity();
@@ -469,16 +492,12 @@ function bind(){
     e.preventDefault();
     const email=$("#emailInput").value.trim(),pw=$("#passwordInput").value;
     try{
-      if(auth.currentUser)await authApi.signOut(auth);
+      requireAuth();
       const cred=await authApi.signInWithEmailAndPassword(auth,email,pw);
       await applyAccount(cred.user);
       $("#loginDialog").close();toast(state.admin?"관리자 로그인":"로그인했습니다.");
     }catch(err){
-      try{
-        if(!auth.currentUser)await authApi.signInAnonymously(auth);
-        await applyAccount(auth.currentUser);
-      }catch{}
-      toast("로그인 실패: 이메일/비밀번호를 확인하세요.");
+      toast(authError(err));
     }
   };
 
@@ -486,19 +505,14 @@ function bind(){
     const email=$("#emailInput").value.trim(),pw=$("#passwordInput").value,nick=$("#nicknameInput").value.trim();
     if(!email||pw.length<6||!nick)return toast("이메일, 6자 이상 비밀번호, 닉네임을 입력하세요.");
     try{
-      if(auth.currentUser)await authApi.signOut(auth);
+      requireAuth();
       const cred=await authApi.createUserWithEmailAndPassword(auth,email,pw);
       await authApi.updateProfile(cred.user,{displayName:nick});
       await cred.user.getIdToken(true);
       await applyAccount(cred.user);
       $("#loginDialog").close();toast(`${nick} 계정을 만들었습니다.`);
     }catch(err){
-      let msg = "회원가입 실패";
-      if(err.code === "auth/email-already-in-use") msg = "이미 사용 중인 이메일입니다.";
-      else if(err.code === "auth/invalid-email") msg = "올바르지 않은 이메일 형식입니다.";
-      else if(err.code === "auth/weak-password") msg = "비밀번호는 6자리 이상이어야 합니다.";
-      else msg = `가입 실패 (${err.code || '오류'}): ${err.message}`;
-      toast(msg);
+      toast(authError(err));
     }
   };
 
@@ -506,23 +520,27 @@ function bind(){
   if(googleLoginBtn){
     googleLoginBtn.onclick = async () => {
       try{
-        if(auth.currentUser) await authApi.signOut(auth);
+        requireAuth();
         const provider = new authApi.GoogleAuthProvider();
         const cred = await authApi.signInWithPopup(auth, provider);
         await applyAccount(cred.user);
         $("#loginDialog").close();
         toast("구글 로그인 성공!");
       }catch(err){
-        toast(`구글 로그인 실패: ${err.message}`);
+        toast(authError(err));
       }
     };
   }
 
   $("#logoutBtn").onclick=async()=>{
-    await authApi.signOut(auth);
-    const cred=await authApi.signInAnonymously(auth);
-    await applyAccount(cred.user);
-    $("#loginDialog").close();toast("익명 모드로 전환했습니다.");
+    try{
+      requireAuth();
+      await authApi.signOut(auth);
+      await applyAccount(null);
+      const account=await ensureAnonymous();
+      await applyAccount(account);
+      $("#loginDialog").close();toast("익명 모드로 전환했습니다.");
+    }catch(err){toast(authError(err));}
   };
 
   $("#copyUidBtn").onclick=$("#copyAdminUidBtn").onclick=async()=>{
@@ -611,6 +629,11 @@ async function init(){
 
   try{
     await initFirebase();
+  }catch(err){
+    toast(authError(err));
+  }
+
+  try{
     await loadCommunity();
     $("#neisStatus").textContent="MongoDB 연결됨 · 학교 정보 확인 중";
   }catch(err){

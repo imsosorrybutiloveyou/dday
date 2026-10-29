@@ -207,3 +207,23 @@ Vercel → 서버 API + NEIS
 ```
 
 Firestore와 Firebase Storage는 이 버전에서는 필요 없습니다.
+
+## 로그인/회원가입/익명 글쓰기가 모두 안 될 때
+
+`firebase-config.js`에는 서비스 계정 JSON을 넣으면 안 됩니다. 이 파일은 누구나 볼 수 있는 공개 파일입니다. 이미 키를 넣었다면 Firebase/Google Cloud 콘솔에서 해당 서비스 계정 키를 폐기하고 새 키를 Vercel의 서버 전용 `FIREBASE_SERVICE_ACCOUNT_JSON`에 등록하세요. 파일에서 삭제해도 이전 Git 기록과 배포본의 키는 폐기되지 않습니다.
+
+1. Firebase 콘솔 → 프로젝트 설정 → 내 앱 → 웹 앱의 **공개 웹 설정**을 복사합니다. 서버 서비스 계정과 같은 Firebase 프로젝트를 사용하세요.
+2. Vercel 환경변수 `FIREBASE_WEB_CONFIG`에 다음 형태의 실제 웹 설정 JSON을 등록합니다. `apiKey`, `authDomain`, `projectId`는 필수입니다. 서비스 계정 JSON이나 `private_key`는 넣지 마세요.
+
+   ```json
+   {"apiKey":"웹 앱 API 키","authDomain":"프로젝트.firebaseapp.com","projectId":"프로젝트 ID","appId":"웹 앱 ID"}
+   ```
+
+   또는 공개 설정 객체를 `firebase-config.js`의 `null` 자리에 넣을 수 있습니다. `/api/firebase-config`는 공개 필드만 반환하며 서버 서비스 계정 환경변수는 읽지 않습니다.
+3. Firebase 콘솔 → Authentication → Sign-in method에서 **이메일/비밀번호**, **Google**, **익명(Anonymous)**을 활성화합니다. Google 공급자의 지원 이메일도 설정합니다.
+4. Authentication → Settings → Authorized domains에 실제 Vercel 서비스 도메인과 사용하는 커스텀 도메인을 추가합니다.
+5. Vercel에서 환경변수가 적용되는 배포 환경을 확인한 뒤 재배포합니다.
+
+검증: 시크릿 창에서 익명 글쓰기 → 이메일 회원가입/로그인 → 로그아웃 후 익명 글쓰기 → Google 로그인 순서로 확인하세요. 계정 로그인 실패나 Google 팝업 취소 후에도 기존 익명 글쓰기가 가능해야 합니다. 게시글 저장에는 `MONGODB_URI`, 서버 토큰 검증에는 `FIREBASE_SERVICE_ACCOUNT_JSON`이 별도로 필요합니다.
+
+로컬 회귀 검사: `node tests/auth.test.mjs` (Firebase SDK 동작을 대체한 검사이며 실제 외부 연동 검증은 별도입니다.)
