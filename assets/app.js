@@ -25,6 +25,7 @@ let user=null;
 let guestCode="?.?";
 let posts=[];
 let pendingMedia=[];
+let editorRange=null;
 let submittingPost=false;
 const votingPosts=new Set();
 let emotes=[];
@@ -351,10 +352,10 @@ function renderEmotes(){
 }
 function insertEmote(i){
   const e=allEmotes()[i];if(!e)return;
-  const target=state.emoteTarget==="comment"?$("#commentInput"):$("#writeBody");
   const value=e.type==="image"?`[[emote:${emoteKey(e)}]]`:(e.char||"");
-  target.value+=(target.value&&!target.value.endsWith(" ")?" ":"")+value+" ";
-  target.dispatchEvent(new Event("input"));
+  if(state.emoteTarget==="comment"){
+    const target=$("#commentInput");target.value+=(target.value?" ":"")+value+" ";target.dispatchEvent(new Event("input"));
+  }else insertEditorNode(document.createTextNode(value+" "));
   $("#emoteDialog").close();
 }
 function findPost(id){return posts.find(p=>String(p.id)===String(id))}
@@ -376,16 +377,9 @@ async function openPost(id){
     $("#viewUp").textContent=p.up||0;
     $("#upCount").textContent=p.up||0;
     $("#downCount").textContent=p.down||0;
-    $("#viewBody").innerHTML=renderRichText(p.body||"");
+    $("#viewBody").innerHTML=renderPostContent(p.body||"",p.attachments||[]);
     const img=safeUrl(p.image||"");
-    $("#viewImage").innerHTML=(img?`<img src="${esc(img)}" alt="첨부 이미지" referrerpolicy="no-referrer">`:"")+
-      (p.attachments||[]).map(media=>{
-        const url=safeUrl(media.url);
-        if(!url)return "";
-        return media.type?.startsWith("video/")
-          ? `<video src="${esc(url)}" controls playsinline preload="metadata" aria-label="${esc(media.name||"첨부 영상")}"></video>`
-          : `<img src="${esc(url)}" alt="${esc(media.name||"첨부 사진")}" loading="lazy">`;
-      }).join("");
+    $("#viewImage").innerHTML=img?`<img src="${esc(img)}" alt="첨부 이미지" referrerpolicy="no-referrer">`:"";
     $("#deletePost").classList.toggle("hidden",!(state.admin||p.ownerUid===firebaseUid));
     renderComments(p);
     renderPosts();
@@ -450,17 +444,84 @@ function fileToDataUrl(file){
   });
 }
 
-function renderAttachments(){
-  $("#attachmentList").innerHTML=pendingMedia.map((media,index)=>`<div class="attachment-item">
-    ${media.file.type.startsWith("video/")?`<video src="${esc(media.preview)}" preload="metadata" muted playsinline></video>`:`<img src="${esc(media.preview)}" alt="">`}
-    <span>${esc(media.file.name)}<small>${(media.file.size/1024/1024).toFixed(1)} MB</small></span>
-    <button type="button" class="subtle-btn" data-remove-attachment="${index}" aria-label="${esc(media.file.name)} 삭제">삭제</button>
-  </div>`).join("");
-  $$("[data-remove-attachment]").forEach(button=>button.onclick=()=>{
-    if(submittingPost)return;
-    const [removed]=pendingMedia.splice(Number(button.dataset.removeAttachment),1);
-    URL.revokeObjectURL(removed.preview);renderAttachments();
-  });
+function editorBody(){
+  const editor=$("#writeBody");
+  function text(node){
+    if(node.nodeType===3)return node.nodeValue;
+    if(node.dataset?.mediaId)return `\n[[media:${node.dataset.mediaId}]]\n`;
+    if(node.nodeName==="BR")return "\n";
+    const content=[...node.childNodes].map(text).join("");
+    return node!==editor&&["DIV","P"].includes(node.nodeName)?`\n${content}\n`:content;
+  }
+  return text(editor).replace(/\n{3,}/g,"\n\n").trim();
+}
+function editorCount(){
+  $("#writeCount").textContent=`${editorBody().length} / 5000`;
+}
+function rememberEditorRange(){
+  const selection=window.getSelection();
+  if(selection?.rangeCount&&$("#writeBody").contains(selection.getRangeAt(0).commonAncestorContainer)){
+    editorRange=selection.getRangeAt(0).cloneRange();
+    const node=editorRange.commonAncestorContainer;
+    const figure=(node.nodeType===1?node:node.parentElement)?.closest?.("[data-media-id]");
+    if(figure){editorRange.setStartAfter(figure);editorRange.collapse(true);}
+  }
+}
+function insertEditorNode(node){
+  const editor=$("#writeBody");
+  let range=editorRange;
+  if(!range||!editor.contains(range.commonAncestorContainer)){range=document.createRange();range.selectNodeContents(editor);range.collapse(false);}
+  range.deleteContents();range.insertNode(node);range.setStartAfter(node);range.collapse(true);
+  const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);
+  editorRange=range.cloneRange();editorCount();
+}
+function dropEditorRange(event){
+  const editor=$("#writeBody");
+  const figure=event.target.closest?.("[data-media-id]");
+  if(figure){
+    editorRange=document.createRange();
+    if(event.clientY<figure.getBoundingClientRect().top+figure.offsetHeight/2)editorRange.setStartBefore(figure);else editorRange.setStartAfter(figure);
+    editorRange.collapse(true);return;
+  }
+  let range=document.caretRangeFromPoint?.(event.clientX,event.clientY);
+  if(!range&&document.caretPositionFromPoint){const pos=document.caretPositionFromPoint(event.clientX,event.clientY);if(pos){range=document.createRange();range.setStart(pos.offsetNode,pos.offset);range.collapse(true);}}
+  editorRange=range&&editor.contains(range.commonAncestorContainer)?range:null;
+}
+function addEditorFiles(files){
+  if(submittingPost)return;
+  if($$("#writeBody [data-media-id]").length+files.length>6)return toast("파일은 최대 6개까지 첨부할 수 있습니다.");
+  const types=["image/jpeg","image/png","image/webp","image/gif","video/mp4","video/webm"];
+  for(const file of files){
+    if(!types.includes(file.type))return toast("JPG, PNG, WebP, GIF 사진과 MP4, WebM 영상만 가능합니다.");
+    if(!file.size||file.size>(file.type.startsWith("video/")?100:10)*1024*1024)return toast("사진은 10MB, 영상은 100MB까지 가능합니다.");
+  }
+  for(const file of files){
+    const media={id:crypto.randomUUID(),file,preview:URL.createObjectURL(file)};pendingMedia.push(media);
+    const figure=document.createElement("figure");figure.className="editor-media";figure.dataset.mediaId=media.id;figure.contentEditable="false";figure.draggable=true;
+    figure.innerHTML=`${file.type.startsWith("video/")?`<video src="${esc(media.preview)}" preload="metadata" controls playsinline draggable="false"></video>`:`<img src="${esc(media.preview)}" alt="${esc(file.name)}" draggable="false">`}
+      <figcaption><span>${esc(file.name)}</span><span class="media-actions"><button type="button" data-move-media="up" aria-label="첨부 위로 이동">↑</button><button type="button" data-move-media="down" aria-label="첨부 아래로 이동">↓</button><button type="button" data-remove-media>삭제</button></span></figcaption>`;
+    insertEditorNode(figure);
+    const paragraph=document.createElement("div");paragraph.append(document.createElement("br"));insertEditorNode(paragraph);
+    editorRange=document.createRange();editorRange.setStart(paragraph,0);editorRange.collapse(true);
+    const selection=window.getSelection();selection.removeAllRanges();selection.addRange(editorRange);
+  }
+  editorCount();
+}
+function mediaHTML(media){
+  const url=safeUrl(media.url);if(!url)return "";
+  return media.type?.startsWith("video/")?`<figure class="post-media"><video src="${esc(url)}" controls playsinline preload="metadata" aria-label="${esc(media.name||"첨부 영상")}"></video></figure>`:`<figure class="post-media"><img src="${esc(url)}" alt="${esc(media.name||"첨부 사진")}" loading="lazy"></figure>`;
+}
+function renderPostContent(body,attachments=[]){
+  const used=new Set();let last=0,result="";
+  for(const match of String(body).matchAll(/\[\[media:([a-f0-9-]{36})\]\]/g)){
+    result+=renderRichText(String(body).slice(last,match.index));
+    const media=attachments.find(item=>item.id===match[1]);
+    if(media){if(!used.has(media)){result+=mediaHTML(media);used.add(media);}}
+    else result+=esc(match[0]);
+    last=match.index+match[0].length;
+  }
+  result+=renderRichText(String(body).slice(last));
+  return result+attachments.filter(media=>!used.has(media)).map(mediaHTML).join("");
 }
 
 function bind(){
@@ -504,37 +565,61 @@ function bind(){
     $("#boardSearchInput").value=state.search;renderPosts();document.querySelector(".board-top").scrollIntoView({behavior:"smooth"});
   };
 
-  $("#writeBody").oninput=e=>$("#writeCount").textContent=`${e.target.value.length} / 5000`;
-  $("#writeFiles").onchange=e=>{
-    const files=[...e.target.files];
-    e.target.value="";
-    if(pendingMedia.length+files.length>6)return toast("파일은 최대 6개까지 첨부할 수 있습니다.");
-    const types=["image/jpeg","image/png","image/webp","image/gif","video/mp4","video/webm"];
-    for(const file of files){
-      if(!types.includes(file.type))return toast("JPG, PNG, WebP, GIF 사진과 MP4, WebM 영상만 가능합니다.");
-      if(!file.size||file.size>(file.type.startsWith("video/")?100:10)*1024*1024)return toast("사진은 10MB, 영상은 100MB까지 가능합니다.");
-    }
-    pendingMedia.push(...files.map(file=>({file,preview:URL.createObjectURL(file)})));
-    renderAttachments();
+  const editor=$("#writeBody");
+  editor.oninput=()=>{editorCount();rememberEditorRange();};
+  editor.onkeyup=editor.onmouseup=editor.onblur=rememberEditorRange;
+  editor.onpaste=e=>{
+    e.preventDefault();if(submittingPost)return;
+    rememberEditorRange();
+    if(e.clipboardData.files.length)addEditorFiles([...e.clipboardData.files]);
+    else insertEditorNode(document.createTextNode(e.clipboardData.getData("text/plain")));
   };
-  $("#postDialog").onclose=()=>{$$("#viewImage video").forEach(video=>video.pause());};
+  editor.ondragstart=e=>{
+    const figure=e.target.closest?.("[data-media-id]");
+    if(!figure)return;
+    e.dataTransfer.setData("application/x-dday-media",figure.dataset.mediaId);e.dataTransfer.effectAllowed="move";
+  };
+  editor.ondragover=e=>{e.preventDefault();};
+  editor.ondrop=e=>{
+    e.preventDefault();if(submittingPost)return;
+    dropEditorRange(e);
+    if(e.dataTransfer.files.length){addEditorFiles([...e.dataTransfer.files]);return;}
+    const id=e.dataTransfer.getData("application/x-dday-media");
+    const figure=$$("#writeBody [data-media-id]").find(node=>node.dataset.mediaId===id);
+    if(figure){if(editorRange&&figure.contains(editorRange.commonAncestorContainer))return;figure.remove();insertEditorNode(figure);}
+    else insertEditorNode(document.createTextNode(e.dataTransfer.getData("text/plain")));
+  };
+  editor.onclick=e=>{
+    const button=e.target.closest?.("[data-remove-media], [data-move-media]");if(!button||submittingPost)return;
+    const figure=button.closest("[data-media-id]");
+    if(button.hasAttribute("data-remove-media"))figure.remove();
+    else if(button.dataset.moveMedia==="up"&&figure.previousSibling)figure.parentNode.insertBefore(figure,figure.previousSibling);
+    else if(button.dataset.moveMedia==="down"&&figure.nextSibling)figure.parentNode.insertBefore(figure,figure.nextSibling.nextSibling);
+    editorCount();
+  };
+  $("#writeFiles").onchange=e=>{const files=[...e.target.files];e.target.value="";addEditorFiles(files);};
+  $("#postDialog").onclose=()=>{$$("#postDialog video").forEach(video=>video.pause());};
   $("#writeDialog").oncancel=e=>{if(submittingPost)e.preventDefault();};
   $("#writeForm").onsubmit=async e=>{
     e.preventDefault();
     if(submittingPost)return;
-    submittingPost=true;
+    const body=editorBody();
+    if(body.length>5000)return toast("본문은 5000자까지 입력할 수 있습니다.");
+    const activeIds=new Set($$("#writeBody [data-media-id]").map(node=>node.dataset.mediaId));
+    const activeMedia=pendingMedia.filter(media=>activeIds.has(media.id));
+    submittingPost=true;$("#writeBody").contentEditable="false";
     $$("#writeDialog button, #writeDialog input, #writeDialog textarea, #writeDialog select").forEach(el=>el.disabled=true);
     try{
       await token();
       const attachments=[];
       let uploadMode="legacy";
-      if(pendingMedia.some(media=>!media.url)){
+      if(activeMedia.some(media=>!media.url)){
         const response=await fetch("/api/upload",{cache:"no-store"});
         const storage=await response.json();
         uploadMode=storage.mode||"legacy";
         if(!response.ok||!storage.available)throw new Error("첨부 저장소가 아직 연결되지 않았습니다. 관리자에게 문의해 주세요.");
       }
-      for(const [index,media] of pendingMedia.entries()){
+      for(const [index,media] of activeMedia.entries()){
         if(!media.url){
           const {upload,uploadPresigned}=await import("/assets/upload-client.js");
           const uploadFile=uploadMode==="presigned"?uploadPresigned:upload;
@@ -544,28 +629,28 @@ function bind(){
             access:"public",handleUploadUrl:"/api/upload",multipart:true,
             contentType:media.file.type,clientPayload:JSON.stringify({type:media.file.type}),
             headers:{Authorization:`Bearer ${await token()}`},
-            onUploadProgress:({percentage})=>{$("#uploadStatus").textContent=`첨부 ${index+1}/${pendingMedia.length} 업로드 중 · ${Math.round(percentage)}%`;}
+            onUploadProgress:({percentage})=>{$("#uploadStatus").textContent=`첨부 ${index+1}/${activeMedia.length} 업로드 중 · ${Math.round(percentage)}%`;}
           });
           media.url=result.url;
         }
-        attachments.push({url:media.url,name:media.file.name});
+        attachments.push({id:media.id,url:media.url,name:media.file.name});
       }
       $("#uploadStatus").textContent="글 저장 중…";
       const data=await api(state.admin&&$("#writeNotice").checked?"createNotice":"createPost",{
         category:$("#writeCategory").value,
-        title:$("#writeTitle").value.trim(),body:$("#writeBody").value.trim(),
+        title:$("#writeTitle").value.trim(),body,
         author:currentName(),guestCode:currentCode(),
         image:safeUrl($("#writeImageUrl").value.trim()),attachments
       });
       posts.unshift(data.post);
-      pendingMedia.forEach(media=>URL.revokeObjectURL(media.preview));pendingMedia=[];renderAttachments();
+      pendingMedia.forEach(media=>URL.revokeObjectURL(media.preview));pendingMedia=[];$("#writeBody").replaceChildren();editorRange=null;
       e.target.reset();$("#writeCount").textContent="0 / 5000";$("#uploadStatus").textContent="";
       $("#writeDialog").close();renderPosts();toast("글이 등록되었습니다.");
     }catch(err){
       $("#uploadStatus").textContent=`등록 실패: ${err.message} · 작성 내용과 첨부는 유지됩니다.`;
       toast(err.message);
     }finally{
-      submittingPost=false;
+      submittingPost=false;$("#writeBody").contentEditable="true";
       $$("#writeDialog button, #writeDialog input, #writeDialog textarea, #writeDialog select").forEach(el=>el.disabled=false);
     }
   };

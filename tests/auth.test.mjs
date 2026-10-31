@@ -34,6 +34,12 @@ const source=readFileSync(new URL('../assets/app.js',import.meta.url),'utf8').re
 vm.runInContext(source,context);
 await vm.runInContext(`
 (async()=>{
+  const mediaId='12345678-1234-1234-1234-123456789012';
+  const media={id:mediaId,url:'https://example.com/photo.png',type:'image/png',name:'photo'};
+  const ordered=renderPostContent('before [[media:'+mediaId+']] after',[media]);
+  if(!(ordered.indexOf('before')<ordered.indexOf('<figure')&&ordered.indexOf('</figure>')<ordered.indexOf('after')))throw Error('Inline media must preserve text order');
+  if(!renderPostContent('old post',[{...media,id:undefined}]).includes('<img'))throw Error('Legacy attachments must remain visible');
+  if(renderPostContent('<script>alert(1)</script>',[]).includes('<script>'))throw Error('Post text must be escaped');
   authInitError=new Error('Configuration failure from server');
   try{requireAuth();throw Error('Expected initialization error');}catch(err){if(err!==authInitError)throw err;}
   authInitError=null;

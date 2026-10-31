@@ -74,3 +74,9 @@ assert.ok(delegated.validUntil>Date.now()&&delegated.validUntil<=Date.now()+15*6
 assert.ok(!('token' in delegated),'Let the SDK use platform OIDC instead of requiring a legacy token');
 console.log('OIDC upload checks passed without a read-write token: readiness, Firebase authorization, scoped signed uploads and limits. SDK network calls stubbed.');
 function response(){return {setHeader(){},status(code){this.code=code;return this;},json(body){this.body=body;return this;}};}
+
+const mediaId='12345678-1234-1234-1234-123456789012';
+assert.equal((await validateAttachments([{id:mediaId,url}],'user-1',inspect))[0].id,mediaId);
+await assert.rejects(()=>validateAttachments([{id:'<img onerror=alert(1)>',url}],'user-1',inspect),{statusCode:400});
+await assert.rejects(()=>validateAttachments([{id:mediaId,url},{id:mediaId,url:url.replace('file.mp4','other.mp4')}],'user-1',inspect),{statusCode:400});
+console.log('Inline media identifiers preserved and validated.');

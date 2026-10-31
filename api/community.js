@@ -162,6 +162,7 @@ export default async function handler(req, res) {
     }
 
     if (action === "createPost") {
+      if (typeof body.body === "string" && body.body.length > 5000) return json(res, 400, { error: "본문은 5000자까지 입력할 수 있습니다." });
       const title = text(body.title, 80);
       const postBody = text(body.body, 5000);
       if (!title) return json(res, 400, { error: "제목을 입력하세요." });
@@ -190,6 +191,7 @@ export default async function handler(req, res) {
 
     if (action === "createNotice") {
       if (!admin) return json(res, 403, { error: "관리자 권한이 필요합니다." });
+      if (typeof body.body === "string" && body.body.length > 5000) return json(res, 400, { error: "본문은 5000자까지 입력할 수 있습니다." });
       const attachments = await validateAttachments(body.attachments, uid);
       const title = text(body.title, 80);
       const postBody = text(body.body, 5000);
