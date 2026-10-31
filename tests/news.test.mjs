@@ -4,10 +4,12 @@ const now=new Date('2026-10-31T09:00:00Z');
 function envelope(items,uris=items.map(item=>item.sourceUrl)){
  return {candidates:[{content:{parts:[{text:JSON.stringify({items})}]},groundingMetadata:{groundingChunks:uris.map(uri=>({web:{uri,title:'Official release'}}))}}]};
 }
-const item={title:'도구 2.0 출시',summary:'개발 도구의 변경 사항과 영향입니다.',eventKey:'tool-v2.0-release',publishedDate:'2026-10-30',sourceUrl:'https://example.com/release?utm_source=test&id=2#section'};
+const item={title:'도구 2.0 출시',summary:'개발 도구의 변경 사항과 영향입니다.',body:'검증된 릴리스 변경 사항과 개발 환경에 미치는 영향을 설명합니다. '.repeat(20),eventKey:'tool-v2.0-release',publishedDate:'2026-10-30',sourceUrl:'https://example.com/release?utm_source=test&id=2#section'};
 assert.equal(canonicalUrl(item.sourceUrl),'https://example.com/release?id=2');
 assert.notEqual(topicKey('C++ 1.0'),topicKey('C 10'));
 assert.throws(()=>canonicalUrl('javascript:alert(1)'));
+assert.equal((await groundedNews(envelope([item]),now))[0].body,item.body.trim());
+await assert.rejects(()=>groundedNews(envelope([{...item,body:'too short'}]),now));
 assert.equal((await groundedNews(envelope([item]),now))[0].sourceUrl,'https://example.com/release?id=2');
 assert.deepEqual(await groundedNews(envelope([],[]),now),[]);
 await assert.rejects(()=>groundedNews(envelope([item],[]),now),/출처/);
@@ -88,3 +90,34 @@ assert.equal((await createNotice('admin',{title:' ',body:'body'})).code,400);
 assert.equal((await createNotice('admin',{title:'공지 제목',body:'공지 내용'})).code,201);
 assert.equal(notice.notice,true);assert.equal(notice.ownerUid,'admin');assert.equal(notice.category,'공지');
 console.log('Notice/news authorization checks passed: admin-only notices and collection, public read-only feed, cron secret verification.');
+
+const articleId='a'.repeat(64);
+let article={_id:articleId,title:'긴 소식',summary:'이전 요약',body:'자세한 본문',attachments:[]};
+let photoType='image/png';
+context.validateAttachments=async entries=>entries.map(entry=>({...entry,type:photoType,size:100}));
+context.getDb=async()=>({collection(name){
+ if(name==='admins')return {async findOne(){return null}};
+ if(name==='news')return {
+  async findOne(filter){return filter._id===article._id?structuredClone(article):null},
+  async findOneAndUpdate(filter,update){
+   const photos=update.$push.attachments.$each;
+   assert.equal(filter.$expr.$lte[1],6-photos.length);
+   assert.deepEqual([...filter['attachments.url'].$nin],photos.map(photo=>photo.url));
+   if(article.attachments.length+photos.length>6||photos.some(photo=>article.attachments.some(old=>old.url===photo.url)))return null;
+   article.attachments.push(...photos);return structuredClone(article);
+  }
+ };
+ throw Error(name);
+}});
+assert.equal((await invoke('GET',undefined,{id:'bad'})).code,400);
+assert.equal((await invoke('GET',undefined,{id:'b'.repeat(64)})).code,404);
+assert.equal((await invoke('GET',undefined,{id:articleId})).body.item.body,'자세한 본문');
+async function attach(uid,attachments){const res=response();await context.handler({method:'POST',headers:{authorization:`Bearer ${uid}`},body:{action:'attachPhotos',id:articleId,attachments}},res);return res;}
+const photo={url:'https://test.public.blob.vercel-storage.com/posts/admin/photo.png',name:'사진'};
+assert.equal((await attach('member',[photo])).code,403);assert.equal(article.attachments.length,0);
+assert.equal((await attach('admin',[photo])).code,200);assert.equal(article.attachments.length,1);
+assert.equal((await attach('admin',[photo])).code,409);assert.equal(article.attachments.length,1);
+photoType='video/mp4';assert.equal((await attach('admin',[{...photo,url:photo.url+'2'}])).code,400);
+photoType='image/png';article.attachments=Array.from({length:6},(_,i)=>({url:'https://example.com/'+i}));
+assert.equal((await attach('admin',[photo])).code,409);assert.equal(article.attachments.length,6);
+console.log('News detail/photo checks passed: public detail lookup, admin-only images, duplicate and concurrent count guard, video rejection.');

@@ -393,6 +393,25 @@
     </div>
   </dialog>
 
+  <dialog id="newsDialog" class="modal news-dialog">
+    <div class="dialog-bar"><span>AI 소식</span><button class="dialog-close" type="button" aria-label="닫기">×</button></div>
+    <article class="news-detail">
+      <div id="newsDetailMeta" class="news-meta"></div>
+      <h2 id="newsDetailTitle"></h2>
+      <p class="news-disclaimer">Gemini가 검색 출처를 바탕으로 작성한 글입니다. 정확한 내용은 원문을 확인하세요.</p>
+      <div id="newsDetailBody" class="news-body"></div>
+      <div id="newsDetailPhotos" class="news-photos"></div>
+      <a id="newsDetailSource" target="_blank" rel="noopener noreferrer">원문 보기 ↗</a>
+      <section id="newsPhotoTools" class="news-photo-tools hidden">
+        <label for="newsPhotoFiles">사진 첨부 (관리자)</label>
+        <input id="newsPhotoFiles" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif">
+        <small>직접 사용 권한이 있는 사진을 올려 주세요. 글당 최대 6개, 파일당 10MB.</small>
+        <button id="retryNewsPhotos" type="button" class="subtle-btn hidden">첨부 다시 저장</button>
+      </section>
+      <p id="newsPhotoStatus" role="status" aria-live="polite"></p>
+    </article>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script src="/firebase-config.js"></script>

@@ -26,6 +26,9 @@ let guestCode="?.?";
 let posts=[];
 let pendingMedia=[];
 let editorRange=null;
+let currentNews=null;
+let newsPhotoDraft=null;
+let newsUploading=false;
 let submittingPost=false;
 const votingPosts=new Set();
 let emotes=[];
@@ -201,13 +204,59 @@ async function loadNews(){
     const response=await fetch("/api/news",{cache:"no-store"});
     const data=await response.json();
     if(!response.ok)throw new Error(data.error||"소식을 불러오지 못했습니다.");
-    $("#newsList").innerHTML=(data.items||[]).map(item=>`<article class="news-item">
-      <div class="news-meta"><time>${esc(item.publishedDate)}</time><span>AI 요약 · Gemini</span></div>
-      <h3>${esc(item.title)}</h3><p>${esc(item.summary)}</p>
-      <a href="${esc(safeUrl(item.sourceUrl))}" target="_blank" rel="noopener noreferrer">${esc(item.sourceName||"원문")} ↗</a>
+    $("#newsList").innerHTML=(data.items||[]).map(item=>`<article class="news-item news-row">
+      <div class="news-row-content"><div class="news-meta"><time>${esc(item.publishedDate)}</time><span>AI 소식 · Gemini</span></div>
+      <h3><button class="news-title" type="button" data-news-id="${esc(item._id)}">${esc(item.title)}</button></h3>
+      <p class="news-excerpt">${esc(String(item.summary||"").slice(0,220))}</p></div>
+      ${item.attachments?.[0]?`<img class="news-thumbnail" src="${esc(safeUrl(item.attachments[0].url))}" alt="첨부 사진" loading="lazy">`:""}
     </article>`).join("")||'<div class="empty-state">등록된 소식이 없습니다. 관리자가 새 소식을 수집하면 여기에 표시됩니다.</div>';
+    $$("[data-news-id]").forEach(button=>button.onclick=()=>openNews(button.dataset.newsId));
     $("#newsStatus").textContent=data.lastCheckedAt?`마지막 수집 확인: ${dateFull(data.lastCheckedAt)}`:"";
   }catch(error){$("#newsStatus").textContent=error.message;}
+}
+
+function renderNewsDetail(){
+  const item=currentNews;if(!item)return;
+  $("#newsDetailTitle").textContent=item.title;
+  $("#newsDetailMeta").textContent=`${item.publishedDate} · AI 소식 · Gemini`;
+  $("#newsDetailBody").innerHTML=renderRichText(item.body||item.summary||"");
+  $("#newsDetailPhotos").innerHTML=(item.attachments||[]).map(mediaHTML).join("");
+  $("#newsDetailSource").href=safeUrl(item.sourceUrl);
+  $("#newsDetailSource").textContent=`${item.sourceName||"원문 보기"} ↗`;
+  $("#newsPhotoTools").classList.toggle("hidden",!state.admin);
+  $("#retryNewsPhotos").classList.toggle("hidden",newsPhotoDraft?.id!==item._id);
+}
+async function openNews(id){
+  if(newsUploading)return;
+  try{
+    const response=await fetch(`/api/news?id=${encodeURIComponent(id)}`,{cache:"no-store"});
+    const data=await response.json();if(!response.ok)throw new Error(data.error||"소식을 불러오지 못했습니다.");
+    currentNews=data.item;$("#newsPhotoStatus").textContent="";renderNewsDetail();
+    if(!$("#newsDialog").open)$("#newsDialog").showModal();
+  }catch(error){toast(error.message);}
+}
+async function saveNewsPhotos(){
+  if(newsUploading||!newsPhotoDraft||newsPhotoDraft.id!==currentNews?._id)return;
+  newsUploading=true;
+  $$("#newsDialog button,#newsDialog input").forEach(element=>element.disabled=true);
+  try{
+    const response=await fetch("/api/upload",{cache:"no-store"});const storage=await response.json();
+    if(!response.ok||!storage.available)throw new Error("첨부 저장소가 연결되지 않았습니다.");
+    const {upload,uploadPresigned}=await import("/assets/upload-client.js");
+    const send=storage.mode==="presigned"?uploadPresigned:upload;
+    const extensions={"image/jpeg":"jpg","image/png":"png","image/webp":"webp","image/gif":"gif"};
+    for(const [index,photo] of newsPhotoDraft.photos.entries()){
+      if(photo.url)continue;
+      const bearer=await token();
+      const path=`posts/${encodeURIComponent(auth.currentUser.uid)}/${photo.id}.${extensions[photo.file.type]}`;
+      const result=await send(path,photo.file,{access:"public",handleUploadUrl:"/api/upload",multipart:true,contentType:photo.file.type,clientPayload:JSON.stringify({type:photo.file.type}),headers:{Authorization:`Bearer ${bearer}`},onUploadProgress:({percentage})=>{$("#newsPhotoStatus").textContent=`사진 ${index+1}/${newsPhotoDraft.photos.length} · ${Math.round(percentage)}%`;}});
+      photo.url=result.url;
+    }
+    const result=await fetch("/api/news",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${await token()}`},body:JSON.stringify({action:"attachPhotos",id:newsPhotoDraft.id,attachments:newsPhotoDraft.photos.map(photo=>({id:photo.id,url:photo.url,name:photo.file.name}))})});
+    const data=await result.json();if(!result.ok)throw new Error(data.error||"사진 저장 실패");
+    currentNews=data.item;newsPhotoDraft=null;renderNewsDetail();$("#newsPhotoStatus").textContent="사진을 첨부했습니다.";await loadNews();
+  }catch(error){$("#newsPhotoStatus").textContent=error.message;$("#retryNewsPhotos").classList.remove("hidden");}
+  finally{newsUploading=false;$$("#newsDialog button,#newsDialog input").forEach(element=>element.disabled=false);}
 }
 
 async function fetchSchoolData(){
@@ -525,6 +574,16 @@ function renderPostContent(body,attachments=[]){
 }
 
 function bind(){
+  $("#newsDialog").oncancel=event=>{if(newsUploading)event.preventDefault();};
+  $("#retryNewsPhotos").onclick=saveNewsPhotos;
+  $("#newsPhotoFiles").onchange=async event=>{
+    const files=[...event.target.files];event.target.value="";
+    if(!state.admin||!currentNews||!files.length||newsUploading)return;
+    if(newsPhotoDraft&&newsPhotoDraft.photos.some(photo=>photo.url))return toast("이전 첨부를 먼저 다시 저장해 주세요.");
+    if((currentNews.attachments||[]).length+files.length>6)return toast("사진은 글당 6개까지 가능합니다.");
+    if(files.some(file=>!["image/jpeg","image/png","image/webp","image/gif"].includes(file.type)||!file.size||file.size>10*1024*1024))return toast("JPG, PNG, WebP, GIF 사진을 파일당 10MB 이하로 선택하세요.");
+    newsPhotoDraft={id:currentNews._id,photos:files.map(file=>({id:crypto.randomUUID(),file}))};await saveNewsPhotos();
+  };
   $$(".dialog-close").forEach(b=>b.onclick=()=>b.closest("dialog").close());
   $$(".dialog-cancel").forEach(b=>b.onclick=()=>b.closest("dialog").close());
   $$("[data-scroll]").forEach(b=>b.onclick=()=>document.getElementById(b.dataset.scroll).scrollIntoView({behavior:"smooth"}));
