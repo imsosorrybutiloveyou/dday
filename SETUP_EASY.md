@@ -230,7 +230,7 @@ Firestore와 Firebase Storage는 이 버전에서는 필요 없습니다.
 
 ## 사진·영상 파일 첨부
 
-Vercel → dday 프로젝트 → Storage → Create Database → Blob에서 **Public** 저장소를 만들고 프로젝트의 Production 환경에 연결하세요. `BLOB_READ_WRITE_TOKEN`이 자동으로 연결된 것을 확인한 뒤 재배포합니다. 이 값은 서버 전용이므로 공개 웹 설정에 넣지 마세요. Preview에서 시험한다면 해당 환경에도 별도로 연결해야 합니다.
+Vercel → dday 프로젝트 → Storage → Create Database → Blob에서 **Public** 저장소를 만들고 프로젝트의 Production 환경에 연결하세요. OIDC 연결은 `BLOB_STORE_ID`와 `BLOB_WEBHOOK_PUBLIC_KEY`를 사용하며, Vercel이 실행 중 OIDC 인증을 제공합니다. `BLOB_READ_WRITE_TOKEN`이 없어도 됩니다. 이전 토큰 방식도 지원합니다. 연결 후 재배포하세요. 서버 인증값을 공개 웹 설정에 넣지 마세요. Preview에서 시험한다면 해당 환경에도 별도로 연결해야 합니다.
 
 - 사진: JPG, PNG, WebP, GIF / 파일당 10MB
 - 영상: MP4, WebM / 파일당 100MB (코덱 재생 지원은 브라우저에 따라 다름)
@@ -249,3 +249,5 @@ Vercel → dday 프로젝트 → Storage → Create Database → Blob에서 **Pu
 - 이전 투표 기록은 게시글을 처음 열거나 투표할 때 계정별 최초 투표로 재집계합니다. 기존 `votes` 기록은 보존합니다. 서로 다른 계정을 같은 사람으로 판별하는 기능은 아닙니다.
 - 계정 화면의 닉네임 저장은 `profiles` 컬렉션에 Firebase UID별로 저장됩니다. Google 이름이 바뀌거나 재로그인해도 저장한 닉네임이 우선됩니다.
 - 닉네임은 1~16자이며 앞으로 작성하는 글·댓글·반콘에 적용됩니다. 이전 글의 작성자 표시는 변경하지 않습니다. 작성자 이름은 클라이언트 입력 대신 서버 계정 정보로 결정합니다.
+
+`/api/upload`의 `available`은 필요한 설정 항목의 존재 여부만 표시하며 실제 저장소 접근 성공을 보장하지 않습니다. OIDC 설정이면 `mode: "presigned"`, 이전 토큰 설정이면 `mode: "legacy"`를 반환합니다. OIDC 업로드는 Firebase 사용자 인증 후 경로·파일 형식·크기·유효기간을 제한한 업로드 전용 서명을 발급합니다.

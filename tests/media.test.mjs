@@ -27,12 +27,12 @@ const context=vm.createContext({
     if(req.headers.authorization!=='Bearer test')throw Object.assign(Error('Authentication required'),{statusCode:401});
     return {uid:'user-1'};
   },
-  handleUpload:async options=>{policy=await options.onBeforeGenerateToken(options.body.pathname,options.body.clientPayload);return {ok:true};}
+  handleUpload:async options=>{policy=await options.onBeforeGenerateToken(options.body.payload.pathname,options.body.payload.clientPayload);return {ok:true};}
 });
 vm.runInContext(readFileSync(new URL('../api/upload.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace('export default async function','async function'),context);
 const invoke=async(headers,pathname,type)=>{
  const res={setHeader(){},status(code){this.code=code;return this;},json(body){this.body=body;return this;}};
- await context.handler({method:'POST',headers,body:{pathname,clientPayload:JSON.stringify({type})}},res);return res;
+ await context.handler({method:'POST',headers,body:{type:'blob.generate-client-token',payload:{pathname,clientPayload:JSON.stringify({type})}}},res);return res;
 };
 const path='posts/user-1/12345678-1234-1234-1234-123456789012.mp4';
 assert.equal((await invoke({},path,'video/mp4')).code,401);
@@ -44,3 +44,33 @@ assert.deepEqual([...policy.allowedContentTypes],['video/mp4']);
 context.process.env.BLOB_READ_WRITE_TOKEN='';
 assert.equal((await invoke({authorization:'Bearer test'},path,'video/mp4')).code,503);
 console.log('Upload endpoint checks passed: authenticated grants only, owner path, type/size policy, storage setup error.');
+
+// OIDC connections have a store ID and webhook public key, without a read-write token.
+context.process.env.BLOB_STORE_ID='store_test';
+context.process.env.BLOB_WEBHOOK_PUBLIC_KEY='public-test-key';
+let delegated;
+context.issueSignedToken=async options=>{delegated=options;return {testSignedToken:true};};
+context.handleUploadPresigned=async options=>{
+  const signed=await options.getSignedToken(options.body.payload.pathname,options.body.payload.clientPayload);
+  assert.equal(signed.token.testSignedToken,true);
+  assert.equal(signed.urlOptions.allowOverwrite,false);
+  assert.equal(signed.urlOptions.addRandomSuffix,true);
+  return {type:'blob.generate-presigned-url',presignedUrlPayload:{test:true}};
+};
+const status=response();await context.handler({method:'GET'},status);
+assert.equal(status.body.available,true);assert.equal(status.body.mode,'presigned');
+async function presignedRequest(headers,pathname=path){
+ const res=response();
+ await context.handler({method:'POST',headers,body:{type:'blob.generate-presigned-url',payload:{pathname,clientPayload:JSON.stringify({type:'video/mp4'})}}},res);
+ return res;
+}
+assert.equal((await presignedRequest({})).code,401);
+assert.equal((await presignedRequest({authorization:'Bearer test'},path.replace('user-1','other'))).code,400);
+assert.equal((await presignedRequest({authorization:'Bearer test'})).code,200);
+assert.equal(delegated.pathname,path);assert.deepEqual([...delegated.operations],['put']);
+assert.equal(delegated.maximumSizeInBytes,MAX_VIDEO_BYTES);
+assert.deepEqual([...delegated.allowedContentTypes],['video/mp4']);
+assert.ok(delegated.validUntil>Date.now()&&delegated.validUntil<=Date.now()+15*60*1000);
+assert.ok(!('token' in delegated),'Let the SDK use platform OIDC instead of requiring a legacy token');
+console.log('OIDC upload checks passed without a read-write token: readiness, Firebase authorization, scoped signed uploads and limits. SDK network calls stubbed.');
+function response(){return {setHeader(){},status(code){this.code=code;return this;},json(body){this.body=body;return this;}};}

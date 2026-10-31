@@ -494,17 +494,20 @@ function bind(){
     try{
       await token();
       const attachments=[];
+      let uploadMode="legacy";
       if(pendingMedia.some(media=>!media.url)){
         const response=await fetch("/api/upload",{cache:"no-store"});
         const storage=await response.json();
+        uploadMode=storage.mode||"legacy";
         if(!response.ok||!storage.available)throw new Error("첨부 저장소가 아직 연결되지 않았습니다. 관리자에게 문의해 주세요.");
       }
       for(const [index,media] of pendingMedia.entries()){
         if(!media.url){
-          const {upload}=await import("/assets/upload-client.js");
+          const {upload,uploadPresigned}=await import("/assets/upload-client.js");
+          const uploadFile=uploadMode==="presigned"?uploadPresigned:upload;
           const extensions={"image/jpeg":"jpg","image/png":"png","image/webp":"webp","image/gif":"gif","video/mp4":"mp4","video/webm":"webm"};
           const pathname=`posts/${encodeURIComponent(auth.currentUser.uid)}/${crypto.randomUUID()}.${extensions[media.file.type]}`;
-          const result=await upload(pathname,media.file,{
+          const result=await uploadFile(pathname,media.file,{
             access:"public",handleUploadUrl:"/api/upload",multipart:true,
             contentType:media.file.type,clientPayload:JSON.stringify({type:media.file.type}),
             headers:{Authorization:`Bearer ${await token()}`},
