@@ -299,6 +299,10 @@ export default async function handler(req, res) {
 
     if (action === "deleteEmote") {
       if (!admin) return json(res, 403, { error: "관리자 권한이 필요합니다." });
+      if (["base-like","base-lol","base-sleep","base-study"].includes(body.emoteId)) {
+        await db.collection("settings").updateOne({ _id:"site" },{ $addToSet:{ hiddenBaseEmotes:body.emoteId } },{ upsert:true });
+        return json(res,200,{ok:true,hiddenBaseEmoteId:body.emoteId});
+      }
       const id = objectId(body.emoteId);
       if (!id) return json(res, 400, { error: "잘못된 반콘 ID" });
       await db.collection("emotes").deleteOne({ _id: id });

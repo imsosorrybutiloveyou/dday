@@ -28,6 +28,7 @@ let pendingMedia=[];
 let editorRange=null;
 let currentNews=null;
 let newsTag="";
+let newsRefreshAt=0;
 let newsComments=[];
 let newsCommentDraft=null;
 let newsCommentPending=false;
@@ -65,7 +66,7 @@ function dateFull(ts){return new Date(ts).toLocaleString("ko-KR",{year:"numeric"
 function ymd(d=new Date()){return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`}
 function toast(msg){const t=$("#toast");t.textContent=msg;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),4500)}
 function emoteKey(e){return String(e.docId||e.id)}
-function allEmotes(){return [...BASE_EMOTES,...emotes]}
+function allEmotes(){return [...BASE_EMOTES.filter(e=>!(settings.hiddenBaseEmotes||[]).includes(emoteKey(e))),...emotes]}
 function findEmote(id){return allEmotes().find(e=>emoteKey(e)===String(id))}
 function emoteMarkup(e,cls="inline-emote"){
   if(e?.type==="image"&&e.url)return `<img class="${cls}" src="${esc(e.url)}" alt="${esc(e.name||"반콘")}" loading="lazy">`;
@@ -210,6 +211,7 @@ async function loadNews(){
     const data=await response.json();
     if(!response.ok)throw new Error(data.error||"소식을 불러오지 못했습니다.");
     if(newsTag!==requestedTag)return;
+    newsRefreshAt=Date.parse(data.nextRefreshAt)||0;
     $("#newsTags").innerHTML=["",...(data.tags||[])].map(tag=>`<button class="category-btn ${newsTag===tag?"active":""}" type="button" data-news-tag="${esc(tag)}">${esc(tag||"전체")}</button>`).join("");
     $$("[data-news-tag]").forEach(button=>button.onclick=()=>{newsTag=button.dataset.newsTag;loadNews();});
     $("#newsList").innerHTML=(data.items||[]).map(item=>`<article class="news-item news-row">
@@ -224,12 +226,20 @@ async function loadNews(){
   }catch(error){$("#newsStatus").textContent=error.message;}
 }
 
+function showNewsPanel(comments){
+  $("#newsArticle").classList.toggle("hidden",comments);
+  $("#newsCommentsPanel").classList.toggle("hidden",!comments);
+  $("#newsReadTab").setAttribute("aria-pressed",String(!comments));
+  $("#newsCommentsTab").setAttribute("aria-pressed",String(comments));
+  if(comments)$("#newsCommentText").focus();
+}
 function renderNewsDetail(){
   const item=currentNews;if(!item)return;
   $("#newsDetailTitle").textContent=item.title;
   $("#newsDetailMeta").textContent=`${item.publishedDate||dateFull(item.createdAt)} · ${item.kind==="knowledge"?"지식·이야기":"최신 소식"} · Gemini`;
   $("#newsDetailTags").innerHTML=(item.tags||["최신 소식"]).map(tag=>`<span>${esc(tag)}</span>`).join("");
   const illustration=item.automaticImage;
+  $("#newsImageStatus").textContent=illustration?"":item.imageStatus==="unavailable"?"사진 검색 서비스에 연결하지 못했습니다. 잠시 후 다시 시도해 주세요.":"자동으로 첨부할 수 있는 관련 사진이 없습니다.";
   $("#newsAutoImage").classList.toggle("hidden",!illustration);
   $("#newsAutoImage").innerHTML=illustration?`<img src="${esc(safeUrl(illustration.url))}" alt="${esc(illustration.caption)}" loading="lazy"><figcaption>관련 이미지 · <a href="${esc(safeUrl(illustration.sourceUrl))}" target="_blank" rel="noopener noreferrer">Wikimedia Commons 원본</a> · ${esc(illustration.credit)} · ${illustration.licenseUrl?`<a href="${esc(safeUrl(illustration.licenseUrl))}" target="_blank" rel="noopener noreferrer">${esc(illustration.license)}</a>`:esc(illustration.license)}</figcaption>`:"";
   $("#newsDetailBody").innerHTML=renderRichText(item.body||item.summary||"");
@@ -244,12 +254,13 @@ async function openNews(id){
   try{
     const response=await fetch(`/api/news?id=${encodeURIComponent(id)}`,{cache:"no-store"});
     const data=await response.json();if(!response.ok)throw new Error(data.error||"소식을 불러오지 못했습니다.");
-    currentNews=data.item;newsComments=data.comments||[];$("#newsPhotoStatus").textContent="";$("#newsCommentStatus").textContent="";$("#newsCommentText").value="";newsCommentDraft=null;renderNewsDetail();renderNewsComments();
+    currentNews=data.item;newsComments=data.comments||[];$("#newsPhotoStatus").textContent="";$("#newsCommentStatus").textContent="";$("#newsCommentText").value="";newsCommentDraft=null;renderNewsDetail();renderNewsComments();showNewsPanel(false);
     if(!$("#newsDialog").open)$("#newsDialog").showModal();
   }catch(error){toast(error.message);}
 }
 function renderNewsComments(){
   $("#newsCommentCount").textContent=newsComments.length;
+  $("#newsCommentsTab").textContent=`댓글 ${newsComments.length}`;
   $("#newsComments").innerHTML=newsComments.map(comment=>`<div class="news-comment"><div><b>${esc(comment.author)}</b><time>${dateFull(comment.createdAt)}</time></div><p>${esc(comment.text)}</p></div>`).join("")||'<p class="quiet-message">등록된 댓글이 없습니다.</p>';
 }
 async function submitNewsComment(event){
@@ -329,6 +340,7 @@ function renderIdentity(){
   $("#noticeWriteOpen").classList.toggle("hidden",!state.admin);
   $("#writeNoticeRow").classList.toggle("hidden",!state.admin);
   $("#refreshNews").classList.toggle("hidden",!state.admin);
+  $("#emoteManageOpen").classList.toggle("hidden",!state.admin);
   $("#identityName").innerHTML=identityHTML(currentName(),currentCode());
   let sub=user?"고정닉 로그인 중":"비로그인 · 익명";
   if(state.admin)sub+=" · 관리자";
@@ -499,16 +511,17 @@ async function openAdminDialog(){
   $("#adminDialog").showModal();
 }
 function renderAdminEmotes(){
-  $("#adminEmoteList").innerHTML=emotes.map(e=>`<div class="admin-emote-row">
+  $("#adminEmoteList").innerHTML=allEmotes().map(e=>`<div class="admin-emote-row">
     ${emoteMarkup(e,"admin-emote-thumb")}
     <span>${esc(e.name)}${e.ownerName?` · ${esc(e.ownerName)}`:""}</span>
-    <button type="button" class="danger-btn" data-del-emote="${esc(e.id)}">삭제</button>
+    <button type="button" class="danger-btn" data-del-emote="${esc(emoteKey(e))}">삭제</button>
   </div>`).join("")||`<div style="padding:12px;color:#888">사용자 반콘이 없습니다.</div>`;
   $$("[data-del-emote]").forEach(b=>b.onclick=async()=>{
     if(!state.admin)return toast("관리자 권한이 필요합니다.");
     if(!confirm("이 반콘을 삭제할까요?"))return;
     try{
-      await api("deleteEmote",{emoteId:b.dataset.delEmote});
+      const result=await api("deleteEmote",{emoteId:b.dataset.delEmote});
+      if(result.hiddenBaseEmoteId)settings.hiddenBaseEmotes=[...(settings.hiddenBaseEmotes||[]),result.hiddenBaseEmoteId];
       emotes=emotes.filter(e=>e.id!==b.dataset.delEmote);
       renderEmotes();renderAdminEmotes();toast("삭제했습니다.");
     }catch(err){toast(err.message)}
@@ -606,6 +619,20 @@ function renderPostContent(body,attachments=[]){
 
 function bind(){
   $("#newsCommentForm").onsubmit=submitNewsComment;
+  $("#newsReadTab").onclick=()=>showNewsPanel(false);
+  $("#newsCommentsTab").onclick=()=>showNewsPanel(true);
+  $("#findNewsImage").onclick=async()=>{
+    const button=$("#findNewsImage");if(button.disabled||!currentNews)return;
+    const id=currentNews._id;button.disabled=true;$("#newsImageStatus").textContent="관련 사진 검색 중…";
+    try{
+      const response=await fetch("/api/news",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${await token()}`},body:JSON.stringify({action:"refreshImage",id})});
+      const data=await response.json();if(!response.ok)throw new Error(data.error||"사진 검색 실패");
+      if(currentNews?._id===id){currentNews=data.item;renderNewsDetail();}
+      await loadNews();
+    }catch(error){$("#newsImageStatus").textContent=error.message;}
+    finally{button.disabled=false;}
+  };
+  $("#emoteManageOpen").onclick=()=>{$("#emoteDialog").close();openAdminDialog();};
   $("#newsDialog").oncancel=event=>{if(newsUploading)event.preventDefault();};
   $("#retryNewsPhotos").onclick=saveNewsPhotos;
   $("#newsPhotoFiles").onchange=async event=>{
@@ -869,10 +896,12 @@ function bind(){
 
   $("#refreshNews").onclick=async()=>{
     const button=$("#refreshNews");if(button.disabled)return;
+    if(Date.now()<newsRefreshAt){$("#newsStatus").textContent=`다음 수집까지 ${Math.ceil((newsRefreshAt-Date.now())/60000)}분 남았습니다. 댓글과 사진 첨부는 사용할 수 있습니다.`;return;}
     button.disabled=true;$("#newsStatus").textContent="검색과 중복 확인 중… 최대 1분 정도 걸릴 수 있습니다.";
     try{
-      const response=await fetch("/api/news",{method:"POST",headers:{Authorization:`Bearer ${await token()}`}});
+      const response=await fetch("/api/news",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${await token()}`},body:JSON.stringify({action:"refresh"})});
       const data=await response.json();
+      if(data.nextRefreshAt)newsRefreshAt=Date.parse(data.nextRefreshAt)||0;
       if(!response.ok)throw new Error(data.error||"소식 수집 실패");
       await loadNews();
       $("#newsStatus").textContent=`새 소식 ${data.added}개 등록 · 중복 ${data.skipped}개 제외`;

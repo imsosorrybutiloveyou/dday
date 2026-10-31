@@ -40,6 +40,7 @@ try{
  process.env.GEMINI_API_KEY='test-only';
  const db=database();let calls=0;
  const request=async(url,options)=>{
+  if(!url.includes('generativelanguage.googleapis.com'))return Response.json({query:{pages:{}}});
   calls++;assert.match(url,/generativelanguage.googleapis.com/);assert.equal(options.headers['x-goog-api-key'],'test-only');
   assert.deepEqual(JSON.parse(options.body).tools,[{google_search:{}}]);
   return Response.json(envelope([item,{...item,title:'같은 사건 다른 제목',sourceUrl:'https://example.com/another'}, {...item,title:'이미 있는 글',eventKey:'existing-post',sourceUrl:'https://example.com/existing'}]));
@@ -69,7 +70,7 @@ const apiDb={collection(name){
 const context=vm.createContext({publicNewsComment,NEWS_TAGS,Buffer,timingSafeEqual,console:{error(){}},process:{env:{ADMIN_UIDS:'admin',CRON_SECRET:'test-cron-secret'}},getDb:async()=>apiDb,requireUser:async req=>{if(!req.headers.authorization)throw Object.assign(Error('auth required'),{statusCode:401});return {uid:req.headers.authorization.replace('Bearer ','')};},refreshNews:async()=>{refreshed++;return {added:1};}});
 vm.runInContext(readFileSync(new URL('../api/news.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace('export default async function','async function'),context);
 const response=()=>({setHeader(){},status(code){this.code=code;return this},json(body){this.body=body;return this}});
-async function invoke(method,authorization,query={}){const res=response();await context.handler({method,headers:{authorization},query},res);return res;}
+async function invoke(method,authorization,query={}){const res=response();await context.handler({method,headers:{authorization},query,body:{action:"refresh"}},res);return res;}
 assert.equal((await invoke('GET')).code,200);assert.equal(refreshed,0);
 assert.equal((await invoke('POST')).code,401);
 assert.equal((await invoke('POST','Bearer member')).code,403);assert.equal(refreshed,0);
@@ -141,7 +142,8 @@ const image=await findNewsImage('TempleOS screenshot',imageRequest(imageInfo));
 assert.equal(image.credit,'Creator');assert.equal(image.license,'CC BY-SA 4.0');assert.equal(image.sourceUrl,imageInfo.descriptionurl);
 assert.equal(await findNewsImage('query',imageRequest({...imageInfo,extmetadata:{...imageInfo.extmetadata,LicenseShortName:{value:'CC BY-NC 4.0'}}})),null);
 assert.equal(await findNewsImage('query',imageRequest({...imageInfo,thumburl:'https://evil.example/image.png'})),null);
-assert.equal(await findNewsImage('query',imageRequest({...imageInfo,mime:'image/svg+xml'})),null);
+assert.equal((await findNewsImage('query',imageRequest({...imageInfo,mime:'image/svg+xml'}))).url,imageInfo.thumburl);
+assert.equal(await findNewsImage('query',imageRequest({...imageInfo,mime:'image/svg+xml',thumburl:'https://upload.wikimedia.org/raw.svg'})),null);
 assert.equal(await findNewsImage('query',async()=>{throw Error('offline')}),null);
 
 const {addNewsComment}=await import('../lib/news-comments.js');
@@ -174,7 +176,7 @@ try{
   if(new URL(url).hostname==='generativelanguage.googleapis.com')return Response.json(envelope([{...knowledge,eventKey:'modulo-bias-explainer',imageQuery:'random number diagram'}]));
   return imageRequest(imageInfo)(url,options);
  }});
- assert.equal(mixedDb.rows.length,1);assert.equal(mixedDb.rows[0].kind,'knowledge');assert.equal(mixedDb.rows[0].automaticImage.license,'CC BY-SA 4.0');assert.ok(!('imageQuery' in mixedDb.rows[0]));
+ assert.equal(mixedDb.rows.length,1);assert.equal(mixedDb.rows[0].kind,'knowledge');assert.equal(mixedDb.rows[0].automaticImage.license,'CC BY-SA 4.0');assert.equal(mixedDb.rows[0].imageQuery,'random number diagram');
 }finally{if(savedGeminiKey===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=savedGeminiKey;}
 let queriedFilter;
 context.getDb=async()=>({collection(name){
@@ -185,3 +187,37 @@ assert.equal((await invoke('GET',undefined,{tag:'운영체제'})).code,200);asse
 assert.equal((await invoke('GET',undefined,{tag:'최신 소식'})).code,200);assert.equal(queriedFilter.$or[1].tags.$exists,false);
 assert.equal((await invoke('GET',undefined,{tag:'unknown'})).code,400);
 console.log('Integrated collection keeps knowledge tags and automatic credits; tag queries include legacy news and reject unknown tags.');
+
+// Topic lookup can recover an image when Commons full-text search misses it.
+let imageCalls=0,imageState;
+const recovered=await findNewsImage('TempleOS',async url=>{
+ imageCalls++;
+ const u=new URL(url);
+ if(u.hostname==='en.wikipedia.org')return Response.json({query:{pages:{1:{pageimage:'TempleOS.png'}}}});
+ if(u.searchParams.has('titles'))return Response.json({query:{pages:{1:{title:'File:TempleOS.png',imageinfo:[imageInfo]}}}});
+ return Response.json({query:{pages:{}}});
+},status=>imageState=status);
+assert.equal(imageCalls,3);assert.equal(imageState,'found');assert.equal(recovered.credit,'Creator');
+await findNewsImage('TempleOS',async()=>{throw Error('offline')},status=>imageState=status);
+assert.equal(imageState,'unavailable');
+let hiddenEmote;
+noticeContext.getDb=async()=>({collection(){return {findOne:async()=>null,updateOne:async(filter,update)=>{hiddenEmote=update.$addToSet.hiddenBaseEmotes;}};}});
+for(const [uid,expected] of [['member',403],['admin',200]]){
+ const res=response();await noticeContext.handler({method:'POST',headers:{authorization:uid},query:{action:'deleteEmote'},body:{emoteId:'base-like'}},res);assert.equal(res.code,expected);
+}
+assert.equal(hiddenEmote,'base-like');
+console.log('Image fallback/status and admin-only default emote removal passed.');
+let imageUpdate;
+context.fetch=async()=>{};
+context.findNewsImage=async(query,request,report)=>{assert.equal(query,'TempleOS');report('found');return image;};
+context.getDb=async()=>({collection(name){return {
+ findOne:async()=>name==='admins'?null:{_id:articleId,title:'Title',imageQuery:'TempleOS'},
+ findOneAndUpdate:async(filter,update)=>{imageUpdate=update.$set;return {_id:articleId,...update.$set};}
+};}});
+for(const [uid,expected] of [['member',403],['admin',200]]){
+ const res=response();await context.handler({method:'POST',headers:{authorization:`Bearer ${uid}`},query:{},body:JSON.stringify({action:'refreshImage',id:articleId})},res);assert.equal(res.code,expected);
+}
+assert.equal(imageUpdate.automaticImage.credit,'Creator');assert.equal(imageUpdate.imageStatus,'found');
+context.findNewsImage=async(query,request,report)=>{report('unavailable');return null;};
+const imageRetry=response();await context.handler({method:'POST',headers:{authorization:'Bearer admin'},query:{},body:{action:'refreshImage',id:articleId}},imageRetry);
+assert.equal(imageRetry.code,200);assert.equal(imageUpdate.imageStatus,'unavailable');assert.ok(!('automaticImage' in imageUpdate));
