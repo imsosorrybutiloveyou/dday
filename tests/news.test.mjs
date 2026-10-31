@@ -260,3 +260,36 @@ try {
  assert.equal(config.functions['api/news.js'].maxDuration,300);
  console.log('Batch collection checks passed: top-up to two, cooldown, bounded timeout retry, partial results preserved.');
 }finally{if(oldKey===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=oldKey;}
+
+// Missing grounding triggers a separate search brief, then grounded article writing.
+process.env.GEMINI_API_KEY='test-only';
+try {
+ const second={...item,title:'독립된 두 번째 글',eventKey:'grounded-second-topic',sourceUrl:'https://example.com/second-topic'};
+ const invented={...item,title:'출처 없는 글',eventKey:'invented-topic',sourceUrl:'https://invented.example/story'};
+ let calls=0;
+ const db=database();
+ const recovered=await refreshNews(db,{now,request:async(url,options)=>{
+  if(!url.includes('generativelanguage.googleapis.com'))return Response.json({query:{pages:{}}});
+  calls++;const payload=JSON.parse(options.body);
+  if(calls===1)return Response.json(envelope([item],[]));
+  if(calls===2){
+   assert.deepEqual(payload.tools,[{google_search:{}}]);
+   assert.match(payload.contents[0].parts[0].text,/Do not write JSON/);
+   const brief=envelope([item,second]);brief.candidates[0].content.parts=[{text:'Verified research brief about two software topics.'}];
+   return Response.json(brief);
+  }
+  assert.equal(payload.tools,undefined);
+  assert.match(payload.contents[0].parts[0].text,/Verified research brief/);
+  return Response.json(envelope([item,second,invented],[]));
+ }});
+ assert.equal(calls,3);assert.equal(recovered.added,2);assert.equal(db.rows.length,2);
+ assert.ok(db.rows.every(row=>!row.sourceUrl.includes('invented')));
+ let missingCalls=0;
+ await assert.rejects(()=>refreshNews(database(),{now,request:async()=>{
+  missingCalls++;return Response.json(envelope([item],[]));
+ }}),{code:'MISSING_GROUNDING',statusCode:502});
+ assert.equal(missingCalls,2,'Do not write articles when the separate search also lacks evidence');
+ const withThought=envelope([item]);withThought.candidates[0].content.parts.unshift({thought:true,text:'Internal reasoning is not JSON'});
+ assert.equal((await groundedNews(withThought,now))[0].title,item.title);
+ console.log('Grounding recovery passed: separate search/write, trusted evidence reused, fabricated sources rejected, bounded failures.');
+}finally{if(oldKey===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=oldKey;}
