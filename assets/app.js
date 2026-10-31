@@ -27,6 +27,10 @@ let posts=[];
 let pendingMedia=[];
 let editorRange=null;
 let currentNews=null;
+let newsTag="";
+let newsComments=[];
+let newsCommentDraft=null;
+let newsCommentPending=false;
 let newsPhotoDraft=null;
 let newsUploading=false;
 let submittingPost=false;
@@ -200,15 +204,20 @@ async function loadCommunity(){
 
 async function loadNews(){
   $("#newsStatus").textContent="소식을 불러오는 중…";
+  const requestedTag=newsTag;
   try{
-    const response=await fetch("/api/news",{cache:"no-store"});
+    const response=await fetch(`/api/news${requestedTag?`?tag=${encodeURIComponent(requestedTag)}`:""}`,{cache:"no-store"});
     const data=await response.json();
     if(!response.ok)throw new Error(data.error||"소식을 불러오지 못했습니다.");
+    if(newsTag!==requestedTag)return;
+    $("#newsTags").innerHTML=["",...(data.tags||[])].map(tag=>`<button class="category-btn ${newsTag===tag?"active":""}" type="button" data-news-tag="${esc(tag)}">${esc(tag||"전체")}</button>`).join("");
+    $$("[data-news-tag]").forEach(button=>button.onclick=()=>{newsTag=button.dataset.newsTag;loadNews();});
     $("#newsList").innerHTML=(data.items||[]).map(item=>`<article class="news-item news-row">
-      <div class="news-row-content"><div class="news-meta"><time>${esc(item.publishedDate)}</time><span>AI 소식 · Gemini</span></div>
+      <div class="news-row-content"><div class="news-meta"><time>${esc(item.publishedDate||dateShort(item.createdAt))}</time><span>${item.kind==="knowledge"?"지식·이야기":"최신 소식"} · Gemini</span></div>
       <h3><button class="news-title" type="button" data-news-id="${esc(item._id)}">${esc(item.title)}</button></h3>
-      <p class="news-excerpt">${esc(String(item.summary||"").slice(0,220))}</p></div>
-      ${item.attachments?.[0]?`<img class="news-thumbnail" src="${esc(safeUrl(item.attachments[0].url))}" alt="첨부 사진" loading="lazy">`:""}
+      <p class="news-excerpt">${esc(String(item.summary||"").slice(0,220))}</p>
+      <div class="news-tags">${(item.tags||["최신 소식"]).map(tag=>`<span>${esc(tag)}</span>`).join("")}</div></div>
+      ${item.attachments?.[0]||item.automaticImage?`<img class="news-thumbnail" src="${esc(safeUrl(item.attachments?.[0]?.url||item.automaticImage.url))}" alt="${esc(item.automaticImage?.caption||"첨부 사진")}" loading="lazy">`:""}
     </article>`).join("")||'<div class="empty-state">등록된 소식이 없습니다. 관리자가 새 소식을 수집하면 여기에 표시됩니다.</div>';
     $$("[data-news-id]").forEach(button=>button.onclick=()=>openNews(button.dataset.newsId));
     $("#newsStatus").textContent=data.lastCheckedAt?`마지막 수집 확인: ${dateFull(data.lastCheckedAt)}`:"";
@@ -218,7 +227,11 @@ async function loadNews(){
 function renderNewsDetail(){
   const item=currentNews;if(!item)return;
   $("#newsDetailTitle").textContent=item.title;
-  $("#newsDetailMeta").textContent=`${item.publishedDate} · AI 소식 · Gemini`;
+  $("#newsDetailMeta").textContent=`${item.publishedDate||dateFull(item.createdAt)} · ${item.kind==="knowledge"?"지식·이야기":"최신 소식"} · Gemini`;
+  $("#newsDetailTags").innerHTML=(item.tags||["최신 소식"]).map(tag=>`<span>${esc(tag)}</span>`).join("");
+  const illustration=item.automaticImage;
+  $("#newsAutoImage").classList.toggle("hidden",!illustration);
+  $("#newsAutoImage").innerHTML=illustration?`<img src="${esc(safeUrl(illustration.url))}" alt="${esc(illustration.caption)}" loading="lazy"><figcaption>관련 이미지 · <a href="${esc(safeUrl(illustration.sourceUrl))}" target="_blank" rel="noopener noreferrer">Wikimedia Commons 원본</a> · ${esc(illustration.credit)} · ${illustration.licenseUrl?`<a href="${esc(safeUrl(illustration.licenseUrl))}" target="_blank" rel="noopener noreferrer">${esc(illustration.license)}</a>`:esc(illustration.license)}</figcaption>`:"";
   $("#newsDetailBody").innerHTML=renderRichText(item.body||item.summary||"");
   $("#newsDetailPhotos").innerHTML=(item.attachments||[]).map(mediaHTML).join("");
   $("#newsDetailSource").href=safeUrl(item.sourceUrl);
@@ -227,14 +240,32 @@ function renderNewsDetail(){
   $("#retryNewsPhotos").classList.toggle("hidden",newsPhotoDraft?.id!==item._id);
 }
 async function openNews(id){
-  if(newsUploading)return;
+  if(newsUploading||newsCommentPending)return;
   try{
     const response=await fetch(`/api/news?id=${encodeURIComponent(id)}`,{cache:"no-store"});
     const data=await response.json();if(!response.ok)throw new Error(data.error||"소식을 불러오지 못했습니다.");
-    currentNews=data.item;$("#newsPhotoStatus").textContent="";renderNewsDetail();
+    currentNews=data.item;newsComments=data.comments||[];$("#newsPhotoStatus").textContent="";$("#newsCommentStatus").textContent="";$("#newsCommentText").value="";newsCommentDraft=null;renderNewsDetail();renderNewsComments();
     if(!$("#newsDialog").open)$("#newsDialog").showModal();
   }catch(error){toast(error.message);}
 }
+function renderNewsComments(){
+  $("#newsCommentCount").textContent=newsComments.length;
+  $("#newsComments").innerHTML=newsComments.map(comment=>`<div class="news-comment"><div><b>${esc(comment.author)}</b><time>${dateFull(comment.createdAt)}</time></div><p>${esc(comment.text)}</p></div>`).join("")||'<p class="quiet-message">등록된 댓글이 없습니다.</p>';
+}
+async function submitNewsComment(event){
+  event.preventDefault();if(!currentNews||newsCommentPending)return;
+  const text=$("#newsCommentText").value.trim();if(!text)return;
+  if(!newsCommentDraft||newsCommentDraft.id!==currentNews._id||newsCommentDraft.text!==text)newsCommentDraft={id:currentNews._id,text,requestId:crypto.randomUUID()};
+  newsCommentPending=true;$("#newsCommentSubmit").disabled=true;$("#newsCommentText").disabled=true;
+  try{
+    const response=await fetch("/api/news",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${await token()}`},body:JSON.stringify({action:"comment",...newsCommentDraft})});
+    const data=await response.json();if(!response.ok)throw new Error(data.error||"댓글 등록 실패");
+    if(!newsComments.some(comment=>comment.id===data.comment.id))newsComments.push(data.comment);
+    newsComments=newsComments.slice(-100);renderNewsComments();newsCommentDraft=null;$("#newsCommentText").value="";$("#newsCommentStatus").textContent="댓글을 등록했습니다.";
+  }catch(error){$("#newsCommentStatus").textContent=error.message;}
+  finally{newsCommentPending=false;$("#newsCommentSubmit").disabled=false;$("#newsCommentText").disabled=false;}
+}
+
 async function saveNewsPhotos(){
   if(newsUploading||!newsPhotoDraft||newsPhotoDraft.id!==currentNews?._id)return;
   newsUploading=true;
@@ -574,6 +605,7 @@ function renderPostContent(body,attachments=[]){
 }
 
 function bind(){
+  $("#newsCommentForm").onsubmit=submitNewsComment;
   $("#newsDialog").oncancel=event=>{if(newsUploading)event.preventDefault();};
   $("#retryNewsPhotos").onclick=saveNewsPhotos;
   $("#newsPhotoFiles").onchange=async event=>{

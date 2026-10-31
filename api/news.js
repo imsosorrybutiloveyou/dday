@@ -2,7 +2,8 @@ import { validateAttachments } from "./_media.js";
 import { timingSafeEqual } from 'node:crypto';
 import { getDb } from './_mongo.js';
 import { requireUser } from './_firebase-admin.js';
-import { refreshNews } from '../lib/news.js';
+import { addNewsComment, publicNewsComment } from '../lib/news-comments.js';
+import { refreshNews, NEWS_TAGS } from '../lib/news.js';
 
 function cronAuthorized(header) {
   const secret = process.env.CRON_SECRET;
@@ -22,17 +23,23 @@ export default async function handler(req, res) {
       if (req.query?.id !== undefined) {
         if (typeof req.query.id !== 'string' || !/^[a-f0-9]{64}$/.test(req.query.id)) return res.status(400).json({ error: '잘못된 소식 주소입니다.' });
         const item = await db.collection('news').findOne({ _id: req.query.id }, { projection: { eventKey: 0, titleKey: 0 } });
-        return item ? res.status(200).json({ item }) : res.status(404).json({ error: '소식을 찾을 수 없습니다.' });
+        if (!item) return res.status(404).json({ error: '글을 찾을 수 없습니다.' });
+        const comments = await db.collection('newsComments').find({ newsId: item._id }).sort({ createdAt: -1, _id: -1 }).limit(100).toArray();
+        return res.status(200).json({ item, comments: comments.reverse().map(publicNewsComment) });
       }
+      const tag = req.query?.tag;
+      if (tag && !NEWS_TAGS.includes(tag)) return res.status(400).json({ error: '잘못된 태그입니다.' });
+      const filter = !tag ? {} : tag === '최신 소식' ? { $or: [{ tags: tag }, { tags: { $exists: false }, kind: { $ne: 'knowledge' } }] } : { tags: tag };
       const [items, state] = await Promise.all([
-        db.collection('news').find({}, { projection: { eventKey: 0, titleKey: 0, body: 0 } }).sort({ createdAt: -1 }).limit(100).toArray(),
+        db.collection('news').find(filter, { projection: { eventKey: 0, titleKey: 0, body: 0 } }).sort({ createdAt: -1 }).limit(100).toArray(),
         db.collection('settings').findOne({ _id: 'news' })
       ]);
-      return res.status(200).json({ items, lastCheckedAt: state?.lastCheckedAt || null });
+      return res.status(200).json({ items, tags: NEWS_TAGS, lastCheckedAt: state?.lastCheckedAt || null });
     }
     if (!cron) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'GET or POST only' });
       const decoded = await requireUser(req);
+      if (req.body?.action === 'comment') return res.status(201).json({ comment: await addNewsComment(db, decoded, req.body) });
       const admins = String(process.env.ADMIN_UIDS || '').split(',').map(value=>value.trim()).filter(Boolean);
       const admin = admins.includes(decoded.uid) || await db.collection('admins').findOne({ uid: decoded.uid, enabled: { $ne: false } });
       if (!admin) return res.status(403).json({ error: '관리자만 소식을 수집하거나 사진을 첨부할 수 있습니다.' });

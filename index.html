@@ -73,7 +73,7 @@
             <button class="tab active" data-tab="all" type="button">전체글</button>
             <button class="tab" data-tab="concept" type="button">개념글</button>
             <button class="tab" data-tab="notice" type="button">공지</button>
-            <button class="tab" data-tab="news" type="button">AI 소식</button>
+            <button class="tab" data-tab="news" type="button">AI 읽을거리</button>
           </div>
           <div class="board-top-actions">
             <select id="pageSize" aria-label="페이지당 글 수">
@@ -86,11 +86,12 @@
           </div>
         </div>
 
-        <section id="newsPanel" class="news-panel hidden" aria-label="AI 소프트웨어 소식">
-          <div class="news-heading"><div><h2>소프트웨어 소식</h2><p>Gemini가 검색 출처를 바탕으로 정리한 최근 소식입니다. 자세한 내용은 원문을 확인하세요.</p></div>
-            <button id="refreshNews" class="subtle-btn hidden" type="button">새 소식 수집</button>
+        <section id="newsPanel" class="news-panel hidden" aria-label="AI 소프트웨어 읽을거리">
+          <div class="news-heading"><div><h2>소프트웨어 읽을거리</h2><p>최신 소식부터 개념·역사·특이한 프로젝트까지, 출처를 바탕으로 정리합니다.</p></div>
+            <button id="refreshNews" class="subtle-btn hidden" type="button">새 글 수집</button>
           </div>
           <p id="newsStatus" class="quiet-message" role="status"></p>
+          <div id="newsTags" class="category-bar" aria-label="읽을거리 태그"></div>
           <div id="newsList"></div>
         </section>
         <div id="boardContent">
@@ -394,11 +395,13 @@
   </dialog>
 
   <dialog id="newsDialog" class="modal news-dialog">
-    <div class="dialog-bar"><span>AI 소식</span><button class="dialog-close" type="button" aria-label="닫기">×</button></div>
+    <div class="dialog-bar"><span>AI 읽을거리</span><button class="dialog-close" type="button" aria-label="닫기">×</button></div>
     <article class="news-detail">
       <div id="newsDetailMeta" class="news-meta"></div>
       <h2 id="newsDetailTitle"></h2>
       <p class="news-disclaimer">Gemini가 검색 출처를 바탕으로 작성한 글입니다. 정확한 내용은 원문을 확인하세요.</p>
+      <div id="newsDetailTags" class="news-tags"></div>
+      <figure id="newsAutoImage" class="news-auto-image hidden"></figure>
       <div id="newsDetailBody" class="news-body"></div>
       <div id="newsDetailPhotos" class="news-photos"></div>
       <a id="newsDetailSource" target="_blank" rel="noopener noreferrer">원문 보기 ↗</a>
@@ -409,6 +412,17 @@
         <button id="retryNewsPhotos" type="button" class="subtle-btn hidden">첨부 다시 저장</button>
       </section>
       <p id="newsPhotoStatus" role="status" aria-live="polite"></p>
+      <section class="news-comments" aria-label="댓글">
+        <h3>댓글 <span id="newsCommentCount">0</span></h3>
+        <p class="news-disclaimer">최근 댓글 100개를 표시합니다.</p>
+        <div id="newsComments"></div>
+        <form id="newsCommentForm">
+          <label for="newsCommentText">댓글 쓰기</label>
+          <textarea id="newsCommentText" maxlength="1000" required placeholder="댓글을 입력하세요. 익명으로도 작성할 수 있습니다."></textarea>
+          <button id="newsCommentSubmit" class="primary-btn" type="submit">댓글 등록</button>
+          <p id="newsCommentStatus" role="status" aria-live="polite"></p>
+        </form>
+      </section>
     </article>
   </dialog>
 

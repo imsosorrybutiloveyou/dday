@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {canonicalUrl, topicKey, groundedNews, refreshNews} from '../lib/news.js';
+import {canonicalUrl, topicKey, groundedNews, refreshNews, NEWS_TAGS} from '../lib/news.js';
 const now=new Date('2026-10-31T09:00:00Z');
 function envelope(items,uris=items.map(item=>item.sourceUrl)){
  return {candidates:[{content:{parts:[{text:JSON.stringify({items})}]},groundingMetadata:{groundingChunks:uris.map(uri=>({web:{uri,title:'Official release'}}))}}]};
@@ -61,11 +61,12 @@ const {readFileSync}=await import('node:fs');
 const vm=await import('node:vm');
 const {timingSafeEqual}=await import('node:crypto');
 let refreshed=0;
+const {publicNewsComment}=await import('../lib/news-comments.js');
 const apiDb={collection(name){
  if(name==='news')return {find(){return {sort(){return {limit(){return {async toArray(){return []}}}}}}}};
  return {async findOne(){return null}};
 }};
-const context=vm.createContext({Buffer,timingSafeEqual,console:{error(){}},process:{env:{ADMIN_UIDS:'admin',CRON_SECRET:'test-cron-secret'}},getDb:async()=>apiDb,requireUser:async req=>{if(!req.headers.authorization)throw Object.assign(Error('auth required'),{statusCode:401});return {uid:req.headers.authorization.replace('Bearer ','')};},refreshNews:async()=>{refreshed++;return {added:1};}});
+const context=vm.createContext({publicNewsComment,NEWS_TAGS,Buffer,timingSafeEqual,console:{error(){}},process:{env:{ADMIN_UIDS:'admin',CRON_SECRET:'test-cron-secret'}},getDb:async()=>apiDb,requireUser:async req=>{if(!req.headers.authorization)throw Object.assign(Error('auth required'),{statusCode:401});return {uid:req.headers.authorization.replace('Bearer ','')};},refreshNews:async()=>{refreshed++;return {added:1};}});
 vm.runInContext(readFileSync(new URL('../api/news.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace('export default async function','async function'),context);
 const response=()=>({setHeader(){},status(code){this.code=code;return this},json(body){this.body=body;return this}});
 async function invoke(method,authorization,query={}){const res=response();await context.handler({method,headers:{authorization},query},res);return res;}
@@ -96,6 +97,7 @@ let article={_id:articleId,title:'긴 소식',summary:'이전 요약',body:'자�
 let photoType='image/png';
 context.validateAttachments=async entries=>entries.map(entry=>({...entry,type:photoType,size:100}));
 context.getDb=async()=>({collection(name){
+ if(name==='newsComments')return {find(){return {sort(){return {limit(){return {async toArray(){return []}}}}}}}};
  if(name==='admins')return {async findOne(){return null}};
  if(name==='news')return {
   async findOne(filter){return filter._id===article._id?structuredClone(article):null},
@@ -121,3 +123,65 @@ photoType='video/mp4';assert.equal((await attach('admin',[{...photo,url:photo.ur
 photoType='image/png';article.attachments=Array.from({length:6},(_,i)=>({url:'https://example.com/'+i}));
 assert.equal((await attach('admin',[photo])).code,409);assert.equal(article.attachments.length,6);
 console.log('News detail/photo checks passed: public detail lookup, admin-only images, duplicate and concurrent count guard, video rejection.');
+
+// Timeless knowledge is allowed without a recent publication date, but still needs grounding.
+const knowledge={...item,kind:'knowledge',title:'모듈러 편향은 왜 생길까',publishedDate:null,tags:['알고리즘','개념·원리','unknown','알고리즘']};
+const knowledgeResult=await groundedNews(envelope([knowledge]),now);
+assert.equal(knowledgeResult[0].kind,'knowledge');assert.equal(knowledgeResult[0].publishedDate,null);
+assert.deepEqual(knowledgeResult[0].tags,['알고리즘','개념·원리']);
+assert.equal((await groundedNews(envelope([item]),now))[0].tags[0],'최신 소식');
+
+const {findNewsImage}=await import('../lib/news-images.js');
+const imageInfo={mime:'image/png',thumburl:'https://upload.wikimedia.org/wikipedia/commons/thumb/test.png',descriptionurl:'https://commons.wikimedia.org/wiki/File:TempleOS.png',extmetadata:{Artist:{value:'<a href="https://example.com">Creator</a>'},LicenseShortName:{value:'CC BY-SA 4.0'},LicenseUrl:{value:'https://creativecommons.org/licenses/by-sa/4.0/'}}};
+const imageRequest=info=>async(url,options)=>{
+ assert.equal(new URL(url).hostname,'commons.wikimedia.org');assert.equal(options.signal.aborted,false);
+ return Response.json({query:{pages:{1:{title:'File:TempleOS.png',index:1,imageinfo:[info]}}}});
+};
+const image=await findNewsImage('TempleOS screenshot',imageRequest(imageInfo));
+assert.equal(image.credit,'Creator');assert.equal(image.license,'CC BY-SA 4.0');assert.equal(image.sourceUrl,imageInfo.descriptionurl);
+assert.equal(await findNewsImage('query',imageRequest({...imageInfo,extmetadata:{...imageInfo.extmetadata,LicenseShortName:{value:'CC BY-NC 4.0'}}})),null);
+assert.equal(await findNewsImage('query',imageRequest({...imageInfo,thumburl:'https://evil.example/image.png'})),null);
+assert.equal(await findNewsImage('query',imageRequest({...imageInfo,mime:'image/svg+xml'})),null);
+assert.equal(await findNewsImage('query',async()=>{throw Error('offline')}),null);
+
+const {addNewsComment}=await import('../lib/news-comments.js');
+const commentRows=new Map();
+const commentDb={collection(name){
+ if(name==='news')return {async findOne(filter){return filter._id===articleId?{_id:articleId}:null}};
+ if(name==='profiles')return {async findOne(){return {nickname:'저장된닉네임'}}};
+ if(name==='newsComments')return {async createIndex(){},async insertOne(row){if(commentRows.has(row._id))throw Object.assign(Error('duplicate'),{code:11000});commentRows.set(row._id,row);},async findOne(filter){return commentRows.get(filter._id)}};
+ throw Error(name);
+}};
+const commentInput={id:articleId,text:' 댓글 내용 ',requestId:'12345678-1234-1234-1234-123456789012',author:'위조닉네임'};
+const commentUser={uid:'user',firebase:{sign_in_provider:'google.com'}};
+const posted=await addNewsComment(commentDb,commentUser,commentInput);
+assert.equal(posted.author,'저장된닉네임');assert.equal(posted.text,'댓글 내용');assert.ok(!('ownerUid' in posted));
+assert.equal((await addNewsComment(commentDb,commentUser,commentInput)).id,posted.id);assert.equal(commentRows.size,1);
+assert.equal((await addNewsComment(commentDb,{uid:'anon',firebase:{sign_in_provider:'anonymous'}},commentInput)).author,'ㅇㅇ');
+await assert.rejects(()=>addNewsComment(commentDb,commentUser,{...commentInput,text:' '}),{statusCode:400});
+await assert.rejects(()=>addNewsComment(commentDb,commentUser,{...commentInput,text:'x'.repeat(1001)}),{statusCode:400});
+await assert.rejects(()=>addNewsComment(commentDb,commentUser,{...commentInput,id:'b'.repeat(64)}),{statusCode:404});
+context.addNewsComment=async(db,decoded,input)=>{assert.equal(decoded.uid,'member');return posted;};
+const commentResponse=response();await context.handler({method:'POST',headers:{authorization:'Bearer member'},body:{action:'comment',...commentInput}},commentResponse);assert.equal(commentResponse.code,201);
+const unauthenticated=response();await context.handler({method:'POST',headers:{},body:{action:'comment',...commentInput}},unauthenticated);assert.equal(unauthenticated.code,401);
+console.log('Knowledge, licensed-image and comment checks passed: timeless grounding, tags, attribution, rejected images, graceful fallback, user/anonymous comments and retry deduplication.');
+
+const savedGeminiKey=process.env.GEMINI_API_KEY;
+try{
+ process.env.GEMINI_API_KEY='test-only';
+ const mixedDb=database();
+ await refreshNews(mixedDb,{now,request:async(url,options)=>{
+  if(new URL(url).hostname==='generativelanguage.googleapis.com')return Response.json(envelope([{...knowledge,eventKey:'modulo-bias-explainer',imageQuery:'random number diagram'}]));
+  return imageRequest(imageInfo)(url,options);
+ }});
+ assert.equal(mixedDb.rows.length,1);assert.equal(mixedDb.rows[0].kind,'knowledge');assert.equal(mixedDb.rows[0].automaticImage.license,'CC BY-SA 4.0');assert.ok(!('imageQuery' in mixedDb.rows[0]));
+}finally{if(savedGeminiKey===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=savedGeminiKey;}
+let queriedFilter;
+context.getDb=async()=>({collection(name){
+ if(name==='settings')return {async findOne(){return null}};
+ return {find(filter){queriedFilter=filter;return {sort(){return {limit(){return {async toArray(){return []}}}}}}}};
+}});
+assert.equal((await invoke('GET',undefined,{tag:'운영체제'})).code,200);assert.equal(queriedFilter.tags,'운영체제');
+assert.equal((await invoke('GET',undefined,{tag:'최신 소식'})).code,200);assert.equal(queriedFilter.$or[1].tags.$exists,false);
+assert.equal((await invoke('GET',undefined,{tag:'unknown'})).code,400);
+console.log('Integrated collection keeps knowledge tags and automatic credits; tag queries include legacy news and reject unknown tags.');
