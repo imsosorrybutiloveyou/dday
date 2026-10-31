@@ -190,11 +190,13 @@ export default async function handler(req, res) {
 
     if (action === "createNotice") {
       if (!admin) return json(res, 403, { error: "관리자 권한이 필요합니다." });
+      const attachments = await validateAttachments(body.attachments, uid);
       const title = text(body.title, 80);
       const postBody = text(body.body, 5000);
-      if (!title || !postBody) return json(res, 400, { error: "제목과 내용을 입력하세요." });
+      if (!title || (!postBody && !attachments.length)) return json(res, 400, { error: "제목과 내용 또는 첨부를 입력하세요." });
 
       const doc = {
+        attachments,
         category: "공지",
         title,
         body: postBody,
@@ -207,7 +209,7 @@ export default async function handler(req, res) {
         up: 0,
         down: 0,
         notice: true,
-        image: "",
+        image: text(body.image, 1200),
         commentCount: 0
       };
       const result = await db.collection("posts").insertOne(doc);

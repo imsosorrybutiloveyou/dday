@@ -14,6 +14,15 @@
     },
     "api/upload.js": {
       "maxDuration": 30
+    },
+    "api/news.js": {
+      "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/news?refresh=1",
+      "schedule": "0 23 * * *"
+    }
+  ]
 }

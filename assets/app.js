@@ -194,6 +194,21 @@ async function loadCommunity(){
   renderEmotes();
 }
 
+async function loadNews(){
+  $("#newsStatus").textContent="소식을 불러오는 중…";
+  try{
+    const response=await fetch("/api/news",{cache:"no-store"});
+    const data=await response.json();
+    if(!response.ok)throw new Error(data.error||"소식을 불러오지 못했습니다.");
+    $("#newsList").innerHTML=(data.items||[]).map(item=>`<article class="news-item">
+      <div class="news-meta"><time>${esc(item.publishedDate)}</time><span>AI 요약 · Gemini</span></div>
+      <h3>${esc(item.title)}</h3><p>${esc(item.summary)}</p>
+      <a href="${esc(safeUrl(item.sourceUrl))}" target="_blank" rel="noopener noreferrer">${esc(item.sourceName||"원문")} ↗</a>
+    </article>`).join("")||'<div class="empty-state">등록된 소식이 없습니다. 관리자가 새 소식을 수집하면 여기에 표시됩니다.</div>';
+    $("#newsStatus").textContent=data.lastCheckedAt?`마지막 수집 확인: ${dateFull(data.lastCheckedAt)}`:"";
+  }catch(error){$("#newsStatus").textContent=error.message;}
+}
+
 async function fetchSchoolData(){
   const status=$("#neisStatus");
   status.className="api-status";
@@ -230,6 +245,9 @@ function applySchoolData(timetable,meals){
 }
 
 function renderIdentity(){
+  $("#noticeWriteOpen").classList.toggle("hidden",!state.admin);
+  $("#writeNoticeRow").classList.toggle("hidden",!state.admin);
+  $("#refreshNews").classList.toggle("hidden",!state.admin);
   $("#identityName").innerHTML=identityHTML(currentName(),currentCode());
   let sub=user?"고정닉 로그인 중":"비로그인 · 익명";
   if(state.admin)sub+=" · 관리자";
@@ -450,7 +468,16 @@ function bind(){
   $$(".dialog-cancel").forEach(b=>b.onclick=()=>b.closest("dialog").close());
   $$("[data-scroll]").forEach(b=>b.onclick=()=>document.getElementById(b.dataset.scroll).scrollIntoView({behavior:"smooth"}));
 
-  $("#writeOpen").onclick=$("#writeBottom").onclick=()=>$("#writeDialog").showModal();
+  $("#writeOpen").onclick=$("#writeBottom").onclick=()=>{$("#writeNotice").checked=false;$("#writeDialog").showModal();};
+  const openNotice=()=>{
+    if(!state.admin)return toast("관리자 권한이 필요합니다.");
+    $("#adminDialog").close();$("#writeNotice").checked=true;$("#writeDialog").showModal();
+  };
+  $("#noticeWriteOpen").onclick=$("#openNoticeEditor").onclick=openNotice;
+  $$("[data-admin-tab]").forEach(button=>button.onclick=()=>{
+    $$("[data-admin-tab]").forEach(tab=>tab.classList.toggle("active",tab===button));
+    $$("#adminPanel .admin-section").forEach(panel=>panel.classList.toggle("hidden",panel.id!==`admin-${button.dataset.adminTab}`));
+  });
   $("#loginOpen").onclick=$("#sideLogin").onclick=()=>$("#loginDialog").showModal();
   $("#adminOpen").onclick=()=>openAdminDialog();
   $("#adminLoginOpen").onclick=()=>{$("#adminDialog").close();$("#loginDialog").showModal()};
@@ -458,7 +485,13 @@ function bind(){
 
   $$(".tab").forEach(b=>b.onclick=()=>{
     $$(".tab").forEach(x=>x.classList.remove("active"));b.classList.add("active");
-    state.tab=b.dataset.tab;state.page=1;renderPosts();
+    state.tab=b.dataset.tab;state.page=1;
+    const news=state.tab==="news";
+    $("#newsPanel").classList.toggle("hidden",!news);
+    $("#boardContent").classList.toggle("hidden",news);
+    $(".notice-strip").classList.toggle("hidden",news);
+    $(".board-top-actions").classList.toggle("hidden",news);
+    if(news)loadNews();else renderPosts();
   });
   $("#pageSize").onchange=e=>{state.size=Number(e.target.value);state.page=1;renderPosts()};
   $("#reloadBtn").onclick=async()=>{try{await loadCommunity();toast("새로고침했습니다.")}catch(err){toast(err.message)}};
@@ -518,7 +551,7 @@ function bind(){
         attachments.push({url:media.url,name:media.file.name});
       }
       $("#uploadStatus").textContent="글 저장 중…";
-      const data=await api("createPost",{
+      const data=await api(state.admin&&$("#writeNotice").checked?"createNotice":"createPost",{
         category:$("#writeCategory").value,
         title:$("#writeTitle").value.trim(),body:$("#writeBody").value.trim(),
         author:currentName(),guestCode:currentCode(),
@@ -658,12 +691,17 @@ function bind(){
     }catch(err){toast(err.message)}
   };
 
-  $("#addNotice").onclick=async()=>{
-    if(!state.admin)return toast("관리자 권한이 필요합니다.");
+  $("#refreshNews").onclick=async()=>{
+    const button=$("#refreshNews");if(button.disabled)return;
+    button.disabled=true;$("#newsStatus").textContent="검색과 중복 확인 중… 최대 1분 정도 걸릴 수 있습니다.";
     try{
-      const data=await api("createNotice",{title:$("#noticeTitle").value.trim(),body:$("#noticeBody").value.trim()});
-      posts.unshift(data.post);$("#noticeTitle").value="";$("#noticeBody").value="";renderPosts();toast("공지를 등록했습니다.");
-    }catch(err){toast(err.message)}
+      const response=await fetch("/api/news",{method:"POST",headers:{Authorization:`Bearer ${await token()}`}});
+      const data=await response.json();
+      if(!response.ok)throw new Error(data.error||"소식 수집 실패");
+      await loadNews();
+      $("#newsStatus").textContent=`새 소식 ${data.added}개 등록 · 중복 ${data.skipped}개 제외`;
+    }catch(error){$("#newsStatus").textContent=error.message;}
+    finally{button.disabled=false;}
   };
 
   $("#saveSettings").onclick=async()=>{

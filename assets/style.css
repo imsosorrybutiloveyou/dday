@@ -403,3 +403,16 @@ a{color:inherit;text-decoration:none}
 .image-url-details summary{cursor:pointer}
 .post-image video{display:block;width:100%;max-height:70vh;background:#111;margin:16px auto}
 @media(max-width:680px){.write-form{padding:16px 14px 0}.write-form .editor{min-height:45dvh}.write-modal .dialog-bar{padding-left:14px}.attachment-tools{gap:6px}.attachment-list{grid-template-columns:1fr}}
+.news-panel{padding-top:20px}
+.news-heading{display:flex;justify-content:space-between;align-items:flex-start;gap:16px}
+.news-heading h2{margin:0;font-size:18px}
+.news-heading p{margin:6px 0;color:var(--muted);font-size:12px}
+.news-heading button{white-space:nowrap}
+.news-item{padding:22px 0;border-bottom:1px solid var(--line)}
+.news-meta{display:flex;gap:12px;font-size:11px;color:var(--muted)}
+.news-item h3{font-size:17px;margin:8px 0}
+.news-item p{line-height:1.85;white-space:pre-wrap;overflow-wrap:anywhere;margin:8px 0 12px}
+.news-item a{color:var(--blue);font-size:12px;text-decoration:underline;overflow-wrap:anywhere}
+.write-form .write-notice{display:flex;align-items:center;gap:6px;margin-top:12px;font-size:13px}
+.write-form .write-notice input{width:auto}
+@media(max-width:680px){.board-top{flex-wrap:wrap}.tabs{max-width:100%;overflow-x:auto}.board-top-actions{margin-left:auto}.news-heading{flex-direction:column}}

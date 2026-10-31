@@ -1,0 +1,90 @@
+import assert from 'node:assert/strict';
+import {canonicalUrl, topicKey, groundedNews, refreshNews} from '../lib/news.js';
+const now=new Date('2026-10-31T09:00:00Z');
+function envelope(items,uris=items.map(item=>item.sourceUrl)){
+ return {candidates:[{content:{parts:[{text:JSON.stringify({items})}]},groundingMetadata:{groundingChunks:uris.map(uri=>({web:{uri,title:'Official release'}}))}}]};
+}
+const item={title:'도구 2.0 출시',summary:'개발 도구의 변경 사항과 영향입니다.',eventKey:'tool-v2.0-release',publishedDate:'2026-10-30',sourceUrl:'https://example.com/release?utm_source=test&id=2#section'};
+assert.equal(canonicalUrl(item.sourceUrl),'https://example.com/release?id=2');
+assert.notEqual(topicKey('C++ 1.0'),topicKey('C 10'));
+assert.throws(()=>canonicalUrl('javascript:alert(1)'));
+assert.equal((await groundedNews(envelope([item]),now))[0].sourceUrl,'https://example.com/release?id=2');
+assert.deepEqual(await groundedNews(envelope([],[]),now),[]);
+await assert.rejects(()=>groundedNews(envelope([item],[]),now),/출처/);
+await assert.rejects(()=>groundedNews(envelope([{...item,sourceUrl:'https://invented.example/news'}],[item.sourceUrl]),now));
+await assert.rejects(()=>groundedNews(envelope([{...item,publishedDate:'2025-01-01'}]),now));
+await assert.rejects(()=>groundedNews(envelope([{...item,publishedDate:'2026-11-05'}]),now));
+const redirect='https://vertexaisearch.cloud.google.com/grounding-api-redirect/example';
+let redirectCalls=0;
+const resolved=await groundedNews(envelope([{...item,sourceUrl:'https://example.com/release?id=2'}],[redirect]),now,async(url,options)=>{
+ redirectCalls++;assert.equal(url,redirect);assert.equal(options.redirect,'manual');return new Response(null,{status:302,headers:{location:'https://example.com/release?id=2'}});
+});
+assert.equal(redirectCalls,1);assert.equal(resolved[0].sourceUrl,'https://example.com/release?id=2');
+
+function database(){
+ const rows=[],settings=new Map();let lock=null;
+ return {rows,collection(name){
+  if(name==='news')return {async createIndex(){},find(){return {sort(){return {limit(){return {async toArray(){return [...rows];}};}};}};},async insertOne(item){if(rows.some(row=>row._id===item._id||row.titleKey===item.titleKey||row.eventKey===item.eventKey))throw Object.assign(Error('duplicate'),{code:11000});rows.push(item);}};
+  if(name==='posts')return {find(){return {sort(){return {limit(){return {async toArray(){return [{title:'이미 있는 글'}];}};}};}};}};
+  if(name==='jobs')return {async findOneAndUpdate(filter,update){if(lock&&lock.expiresAt>filter.expiresAt.$lte)throw Object.assign(Error('busy'),{code:11000});lock=update.$set;return lock;},async deleteOne(filter){if(lock?.owner===filter.owner)lock=null;}};
+  if(name==='settings')return {async findOne(filter){return settings.get(filter._id);},async updateOne(filter,update){settings.set(filter._id,update.$set);}};
+  throw Error(name);
+ }};
+}
+const oldKey=process.env.GEMINI_API_KEY;
+try{
+ delete process.env.GEMINI_API_KEY;
+ await assert.rejects(()=>refreshNews(database()),{statusCode:503});
+ process.env.GEMINI_API_KEY='test-only';
+ const db=database();let calls=0;
+ const request=async(url,options)=>{
+  calls++;assert.match(url,/generativelanguage.googleapis.com/);assert.equal(options.headers['x-goog-api-key'],'test-only');
+  assert.deepEqual(JSON.parse(options.body).tools,[{google_search:{}}]);
+  return Response.json(envelope([item,{...item,title:'같은 사건 다른 제목',sourceUrl:'https://example.com/another'}, {...item,title:'이미 있는 글',eventKey:'existing-post',sourceUrl:'https://example.com/existing'}]));
+ };
+ const results=await Promise.allSettled([refreshNews(db,{request,now}),refreshNews(db,{request,now})]);
+ assert.equal(results.filter(result=>result.status==='fulfilled').length,1);
+ assert.equal(calls,1);assert.equal(db.rows.length,1);
+ assert.equal(results.find(result=>result.status==='fulfilled').value.skipped,2);
+ await assert.rejects(()=>refreshNews(db,{request,now}),{statusCode:429});
+ const repeat=await refreshNews(db,{request,now:new Date(now.getTime()+20*60*1000)});
+ assert.equal(repeat.added,0);assert.equal(db.rows.length,1);
+ const failing=database();
+ await assert.rejects(()=>refreshNews(failing,{now,request:async()=>new Response('',{status:429})}),/사용량/);
+ assert.equal((await refreshNews(failing,{now,request:async()=>Response.json(envelope([]))})).added,0,'Failure must release lock');
+}finally{if(oldKey===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=oldKey;}
+console.log('News checks passed: grounding/date validation, canonical source URLs, duplicate event/title/source rejection, existing posts, concurrent refresh lock, cooldown, provider errors. External services stubbed.');
+
+const {readFileSync}=await import('node:fs');
+const vm=await import('node:vm');
+const {timingSafeEqual}=await import('node:crypto');
+let refreshed=0;
+const apiDb={collection(name){
+ if(name==='news')return {find(){return {sort(){return {limit(){return {async toArray(){return []}}}}}}}};
+ return {async findOne(){return null}};
+}};
+const context=vm.createContext({Buffer,timingSafeEqual,console:{error(){}},process:{env:{ADMIN_UIDS:'admin',CRON_SECRET:'test-cron-secret'}},getDb:async()=>apiDb,requireUser:async req=>{if(!req.headers.authorization)throw Object.assign(Error('auth required'),{statusCode:401});return {uid:req.headers.authorization.replace('Bearer ','')};},refreshNews:async()=>{refreshed++;return {added:1};}});
+vm.runInContext(readFileSync(new URL('../api/news.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace('export default async function','async function'),context);
+const response=()=>({setHeader(){},status(code){this.code=code;return this},json(body){this.body=body;return this}});
+async function invoke(method,authorization,query={}){const res=response();await context.handler({method,headers:{authorization},query},res);return res;}
+assert.equal((await invoke('GET')).code,200);assert.equal(refreshed,0);
+assert.equal((await invoke('POST')).code,401);
+assert.equal((await invoke('POST','Bearer member')).code,403);assert.equal(refreshed,0);
+assert.equal((await invoke('GET','Bearer wrong-secret')).code,200);assert.equal(refreshed,0);
+assert.equal((await invoke('GET','Bearer wrong-secret',{refresh:'1'})).code,401);
+assert.equal((await invoke('POST','Bearer admin')).code,200);assert.equal(refreshed,1);
+assert.equal((await invoke('GET','Bearer test-cron-secret',{refresh:'1'})).code,200);assert.equal(refreshed,2);
+delete context.process.env.CRON_SECRET;
+assert.equal((await invoke('GET','Bearer undefined',{refresh:'1'})).code,401);assert.equal(refreshed,2);
+
+const {ObjectId}=await import('mongodb');
+let notice;
+const noticeDb={collection(name){if(name==='posts')return {async insertOne(doc){notice=doc;return {insertedId:new ObjectId()}}};return {async findOne(){return null}};}};
+const noticeContext=vm.createContext({ObjectId,console:{error(){}},process:{env:{ADMIN_UIDS:'admin'}},getDb:async()=>noticeDb,requireUser:async req=>({uid:req.headers.authorization}),accountNickname:async()=> 'nickname',validateAttachments:async()=>[]});
+vm.runInContext(readFileSync(new URL('../api/community.js',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').replace('export default async function','async function'),noticeContext);
+async function createNotice(uid,body){const res=response();await noticeContext.handler({method:'POST',headers:{authorization:uid},query:{action:'createNotice'},body},res);return res;}
+assert.equal((await createNotice('member',{title:'title',body:'body'})).code,403);assert.equal(notice,undefined);
+assert.equal((await createNotice('admin',{title:' ',body:'body'})).code,400);
+assert.equal((await createNotice('admin',{title:'공지 제목',body:'공지 내용'})).code,201);
+assert.equal(notice.notice,true);assert.equal(notice.ownerUid,'admin');assert.equal(notice.category,'공지');
+console.log('Notice/news authorization checks passed: admin-only notices and collection, public read-only feed, cron secret verification.');
