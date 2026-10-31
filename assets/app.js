@@ -897,14 +897,14 @@ function bind(){
   $("#refreshNews").onclick=async()=>{
     const button=$("#refreshNews");if(button.disabled)return;
     if(Date.now()<newsRefreshAt){$("#newsStatus").textContent=`다음 수집까지 ${Math.ceil((newsRefreshAt-Date.now())/60000)}분 남았습니다. 댓글과 사진 첨부는 사용할 수 있습니다.`;return;}
-    button.disabled=true;$("#newsStatus").textContent="검색과 중복 확인 중… 최대 1분 정도 걸릴 수 있습니다.";
+    button.disabled=true;$("#newsStatus").textContent="새 글 4개를 검색·작성 중… 2개 미만이면 추가 수집합니다. 최대 4분 정도 걸릴 수 있습니다.";
     try{
       const response=await fetch("/api/news",{method:"POST",headers:{"Content-Type":"application/json",Authorization:`Bearer ${await token()}`},body:JSON.stringify({action:"refresh"})});
       const data=await response.json();
       if(data.nextRefreshAt)newsRefreshAt=Date.parse(data.nextRefreshAt)||0;
       if(!response.ok)throw new Error(data.error||"소식 수집 실패");
       await loadNews();
-      $("#newsStatus").textContent=`새 소식 ${data.added}개 등록 · 중복 ${data.skipped}개 제외`;
+      $("#newsStatus").textContent=data.warning||`새 소식 ${data.added}개 등록 · 중복 ${data.skipped}개 제외`;
     }catch(error){$("#newsStatus").textContent=error.message;}
     finally{button.disabled=false;}
   };

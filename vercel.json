@@ -16,7 +16,7 @@
       "maxDuration": 30
     },
     "api/news.js": {
-      "maxDuration": 60
+      "maxDuration": 300
     }
   },
   "crons": [

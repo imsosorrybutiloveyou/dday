@@ -47,9 +47,10 @@ try{
  };
  const results=await Promise.allSettled([refreshNews(db,{request,now}),refreshNews(db,{request,now})]);
  assert.equal(results.filter(result=>result.status==='fulfilled').length,1);
- assert.equal(calls,1);assert.equal(db.rows.length,1);
- assert.equal(results.find(result=>result.status==='fulfilled').value.skipped,2);
- await assert.rejects(()=>refreshNews(db,{request,now}),{statusCode:429});
+ assert.equal(calls,2);assert.equal(db.rows.length,1);
+ assert.equal(results.find(result=>result.status==='fulfilled').value.skipped,5);
+ assert.match(results.find(result=>result.status==='fulfilled').value.warning,/최소 2개/);
+ assert.equal((await refreshNews(db,{request,now})).added,0,'Partial batches can be retried immediately');
  const repeat=await refreshNews(db,{request,now:new Date(now.getTime()+20*60*1000)});
  assert.equal(repeat.added,0);assert.equal(db.rows.length,1);
  const failing=database();
@@ -221,3 +222,41 @@ assert.equal(imageUpdate.automaticImage.credit,'Creator');assert.equal(imageUpda
 context.findNewsImage=async(query,request,report)=>{report('unavailable');return null;};
 const imageRetry=response();await context.handler({method:'POST',headers:{authorization:'Bearer admin'},query:{},body:{action:'refreshImage',id:articleId}},imageRetry);
 assert.equal(imageRetry.code,200);assert.equal(imageUpdate.imageStatus,'unavailable');assert.ok(!('automaticImage' in imageUpdate));
+
+// Collection fills a short first batch once, but does not repeat successful batches.
+process.env.GEMINI_API_KEY='test-only';
+try {
+ const second={...item,title:'다른 소프트웨어 이야기',eventKey:'another-software-story',sourceUrl:'https://example.com/second'};
+ const batchDb=database();let rounds=0;
+ const batchRequest=async(url,options)=>{
+  if(!url.includes('generativelanguage.googleapis.com'))return Response.json({query:{pages:{}}});
+  rounds++;
+  const payload=JSON.parse(options.body);assert.equal(payload.generationConfig.thinkingConfig.thinkingBudget,512);
+  if(rounds===2)assert.ok(payload.contents[0].parts[0].text.includes(topicKey(item.title)));
+  return Response.json(envelope(rounds===1?[item]:[item,second]));
+ };
+ const batch=await refreshNews(batchDb,{now,request:batchRequest});
+ assert.equal(rounds,2);assert.equal(batch.added,2);assert.equal(batch.warning,'');
+ await assert.rejects(()=>refreshNews(batchDb,{now,request:batchRequest}),{statusCode:429});
+ assert.equal(rounds,2);
+ let timeoutCalls=0;
+ const recovered=await refreshNews(database(),{now,request:async(url)=>{
+  if(!url.includes('generativelanguage.googleapis.com'))return Response.json({query:{pages:{}}});
+  if(++timeoutCalls===1)throw new DOMException('slow','TimeoutError');
+  return Response.json(envelope([item,second]));
+ }});
+ assert.equal(timeoutCalls,2);assert.equal(recovered.added,2);
+ let failures=0;
+ await assert.rejects(()=>refreshNews(database(),{now,request:async()=>{failures++;throw new DOMException('slow','TimeoutError');}}),{statusCode:504});
+ assert.equal(failures,2);
+ const partialDb=database();let partialCalls=0;
+ const partial=await refreshNews(partialDb,{now,request:async(url)=>{
+  if(!url.includes('generativelanguage.googleapis.com'))return Response.json({query:{pages:{}}});
+  if(++partialCalls===2)throw new DOMException('slow','TimeoutError');
+  return Response.json(envelope([item]));
+ }});
+ assert.equal(partial.added,1);assert.equal(partialDb.rows.length,1);assert.match(partial.warning,/최소 2개/);
+ const config=JSON.parse(readFileSync(new URL('../vercel.json',import.meta.url),'utf8'));
+ assert.equal(config.functions['api/news.js'].maxDuration,300);
+ console.log('Batch collection checks passed: top-up to two, cooldown, bounded timeout retry, partial results preserved.');
+}finally{if(oldKey===undefined)delete process.env.GEMINI_API_KEY;else process.env.GEMINI_API_KEY=oldKey;}
